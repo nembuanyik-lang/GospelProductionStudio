@@ -10,7 +10,8 @@
 //  Changes save automatically less than a second after you stop typing.
 //==============================================================================
 class SongEditor final : public juce::Component,
-                         private juce::Timer
+                         private juce::Timer,
+                         private juce::ChangeListener
 {
 public:
     SongEditor (SongLibrary&, MemoRecorder&);
@@ -21,13 +22,15 @@ public:
     void flush();                     // save now if anything changed
     void focusTitle();
 
-    std::function<void()> onSongDeleted;
+    std::function<void (const juce::String& id)> onSongDeleted;
+    std::function<void (const juce::String& id)> onOpenInStudio;
 
     void paint (juce::Graphics&) override;
     void resized() override;
 
 private:
     void timerCallback() override;
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void markDirty();
     void readFieldsIntoSong();
     void rebuildSections (int focusIndex = -1);
@@ -58,6 +61,7 @@ private:
     juce::ComboBox   keyBox, timeSigBox, themeBox, statusBox;
     juce::Slider     tempoSlider      { juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft };
     juce::TextButton deleteSongButton { "Delete Song" };
+    juce::TextButton openStudioButton { "Open in Studio" };
 
     // Voice memo
     juce::TextButton recordButton     { "Record Memo" };

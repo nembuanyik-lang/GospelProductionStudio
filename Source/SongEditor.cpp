@@ -1,4 +1,5 @@
 #include "SongEditor.h"
+#include "Dialogs.h"
 #include <map>
 #include <tuple>
 
@@ -43,6 +44,16 @@ SongEditor::SongEditor (SongLibrary& lib, MemoRecorder& rec)
     deleteSongButton.setColour (juce::TextButton::textColourOffId, StudioColours::bad);
     deleteSongButton.onClick = [this] { deleteSong(); };
 
+    openStudioButton.setColour (juce::TextButton::buttonColourId, StudioColours::gold);
+    openStudioButton.setColour (juce::TextButton::textColourOffId, StudioColours::header);
+    openStudioButton.setTooltip ("Open this song as a project in the Studio");
+    openStudioButton.onClick = [this]
+    {
+        flush();
+        if (hasSong && onOpenInStudio)
+            onOpenInStudio (song.id);
+    };
+
     recordButton.onClick     = [this] { toggleRecord(); };
     playButton.onClick       = [this] { togglePlay(); };
     deleteMemoButton.onClick = [this] { deleteMemo(); };
@@ -71,18 +82,41 @@ SongEditor::SongEditor (SongLibrary& lib, MemoRecorder& rec)
                                 (juce::Component*) &tempoSlider, (juce::Component*) &timeSigBox,
                                 (juce::Component*) &themeBox, (juce::Component*) &statusBox,
                                 (juce::Component*) &scriptureEdit, (juce::Component*) &notesEdit,
-                                (juce::Component*) &deleteSongButton, (juce::Component*) &recordButton,
+                                (juce::Component*) &deleteSongButton, (juce::Component*) &openStudioButton,
+                                (juce::Component*) &recordButton,
                                 (juce::Component*) &playButton, (juce::Component*) &deleteMemoButton,
                                 (juce::Component*) &addSectionButton, (juce::Component*) &sectionsViewport })
         addChildComponent (c);
 
+    library.addChangeListener (this);
     startTimerHz (10);
 }
 
 SongEditor::~SongEditor()
 {
+    library.removeChangeListener (this);
     stopTimer();
     flush();
+}
+
+void SongEditor::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    // Tempo, key and time signature can also be changed in the Studio.
+    if (! hasSong || dirty)
+        return;
+
+    const auto* latest = library.find (song.id);
+    if (latest == nullptr || latest->modified == song.modified)
+        return;
+
+    song.tempo         = latest->tempo;
+    song.key           = latest->key;
+    song.timeSignature = latest->timeSignature;
+    song.modified      = latest->modified;
+
+    keyBox.setText (song.key, juce::dontSendNotification);
+    tempoSlider.setValue (song.tempo, juce::dontSendNotification);
+    timeSigBox.setText (song.timeSignature, juce::dontSendNotification);
 }
 
 //==============================================================================
@@ -309,16 +343,8 @@ void SongEditor::removeSection (int index)
     }
 
     juce::Component::SafePointer<SongEditor> safe (this);
-    juce::AlertWindow::showAsync (juce::MessageBoxOptions::makeOptionsOkCancel (
-                                      juce::MessageBoxIconType::QuestionIcon,
-                                      "Remove section",
-                                      "Remove this section and its lyrics?",
-                                      "Remove", "Keep", this),
-                                  [safe, doRemove] (int result)
-                                  {
-                                      if (safe != nullptr && result == 1)
-                                          doRemove();
-                                  });
+    Dialogs::confirm (this, "Remove section", "Remove this section and its lyrics?", "Remove", "Keep",
+                      [safe, doRemove] { if (safe != nullptr) doRemove(); });
 }
 
 void SongEditor::deleteSong()
@@ -329,27 +355,27 @@ void SongEditor::deleteSong()
     juce::Component::SafePointer<SongEditor> safe (this);
     const auto id = song.id;
 
-    juce::AlertWindow::showAsync (juce::MessageBoxOptions::makeOptionsOkCancel (
-                                      juce::MessageBoxIconType::WarningIcon,
-                                      "Delete song",
-                                      "Move \"" + song.title + "\" and its voice memo to the Recycle Bin?\n"
-                                      "You can restore it from the Recycle Bin if needed.",
-                                      "Delete", "Cancel", this),
-                                  [safe, id] (int result)
-                                  {
-                                      if (safe == nullptr || result != 1)
-                                          return;
+    Dialogs::confirm (this, "Delete song",
+                      "Move \"" + song.title + "\" and its voice memo to the Recycle Bin?\n"
+                      "You can restore it from the Recycle Bin if needed.",
+                      "Delete", "Cancel",
+                      [safe, id]
+                      {
+                          if (safe == nullptr)
+                              return;
 
-                                      safe->memo.stopRecording();
-                                      safe->memo.stopPlayback();
-                                      safe->dirty   = false;
-                                      safe->hasSong = false;
-                                      safe->library.remove (id);
-                                      safe->clear();
+                          safe->memo.stopRecording();
+                          safe->memo.stopPlayback();
+                          safe->dirty   = false;
+                          safe->hasSong = false;
 
-                                      if (safe != nullptr && safe->onSongDeleted)
-                                          safe->onSongDeleted();
-                                  });
+                          if (safe->onSongDeleted)
+                              safe->onSongDeleted (id);   // let the Studio close it first
+
+                          safe->library.remove (id);
+                          safe->clear();
+                      },
+                      juce::MessageBoxIconType::WarningIcon);
 }
 
 //==============================================================================
@@ -376,28 +402,19 @@ void SongEditor::toggleRecord()
             return;
 
         if (! safe->memo.startRecording (file))
-        {
-            juce::AlertWindow::showAsync (juce::MessageBoxOptions::makeOptionsOk (
-                                              juce::MessageBoxIconType::WarningIcon,
-                                              "Cannot record",
-                                              "Recording could not start. Open Audio & MIDI Setup and choose an input, "
-                                              "and check that Windows allows apps to use the microphone "
-                                              "(Settings > Privacy > Microphone).",
-                                              "OK", safe.getComponent()),
-                                          nullptr);
-        }
+            Dialogs::message (safe.getComponent(), "Cannot record",
+                              "Recording could not start. Open Audio & MIDI Setup and choose an input, "
+                              "and check that Windows allows apps to use the microphone "
+                              "(Settings > Privacy > Microphone).");
 
         safe->updateMemoControls();
     };
 
     if (file.existsAsFile())
     {
-        juce::AlertWindow::showAsync (juce::MessageBoxOptions::makeOptionsOkCancel (
-                                          juce::MessageBoxIconType::QuestionIcon,
-                                          "Replace voice memo",
-                                          "This song already has a voice memo. Record a new one and replace it?",
-                                          "Record New", "Cancel", this),
-                                      [start] (int result) { if (result == 1) start(); });
+        Dialogs::confirm (this, "Replace voice memo",
+                          "This song already has a voice memo. Record a new one and replace it?",
+                          "Record New", "Cancel", start);
     }
     else
     {
@@ -420,21 +437,17 @@ void SongEditor::deleteMemo()
     juce::Component::SafePointer<SongEditor> safe (this);
     const auto file = library.getMemoFile (song.id);
 
-    juce::AlertWindow::showAsync (juce::MessageBoxOptions::makeOptionsOkCancel (
-                                      juce::MessageBoxIconType::QuestionIcon,
-                                      "Delete voice memo",
-                                      "Move this voice memo to the Recycle Bin?",
-                                      "Delete", "Cancel", this),
-                                  [safe, file] (int result)
-                                  {
-                                      if (safe == nullptr || result != 1)
-                                          return;
+    Dialogs::confirm (this, "Delete voice memo", "Move this voice memo to the Recycle Bin?", "Delete", "Cancel",
+                      [safe, file]
+                      {
+                          if (safe == nullptr)
+                              return;
 
-                                      safe->memo.stopPlayback();
-                                      file.moveToTrash();
-                                      safe->memoSecondsStale = true;
-                                      safe->updateMemoControls();
-                                  });
+                          safe->memo.stopPlayback();
+                          file.moveToTrash();
+                          safe->memoSecondsStale = true;
+                          safe->updateMemoControls();
+                      });
 }
 
 void SongEditor::updateMemoControls()
@@ -549,7 +562,9 @@ void SongEditor::resized()
 
     // Title row
     auto titleRow = area.removeFromTop (46);
-    deleteSongButton.setBounds (titleRow.removeFromRight (130).reduced (0, 6));
+    deleteSongButton.setBounds (titleRow.removeFromRight (120).reduced (0, 6));
+    titleRow.removeFromRight (10);
+    openStudioButton.setBounds (titleRow.removeFromRight (150).reduced (0, 6));
     titleRow.removeFromRight (16);
     titleEdit.setBounds (titleRow);
     area.removeFromTop (10);

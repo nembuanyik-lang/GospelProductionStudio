@@ -1,10 +1,10 @@
 # =============================================================================
 #  Gospel Production Studio
-#  Stage 1 / Step 3 - Song Library
+#  Stage 1 / Step 4 - Transport, metronome, tempo and key
 # =============================================================================
 cmake_minimum_required(VERSION 3.22)
 
-project(GospelProductionStudio VERSION 0.2.0 LANGUAGES C CXX)
+project(GospelProductionStudio VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,8 +33,12 @@ endif()
 
 add_subdirectory("${JUCE_DIR}" "${CMAKE_BINARY_DIR}/juce")
 
-# Tracktion Engine is downloaded in Stage 0 and linked from Stage 1
-# (timeline, tracks and recording are built on it).
+# Tracktion Engine: the professional DAW engine (transport, tracks,
+# recording, mixing, plugins).
+juce_add_modules(ALIAS_NAMESPACE tracktion
+    "${TE_DIR}/modules/tracktion_core"
+    "${TE_DIR}/modules/tracktion_graph"
+    "${TE_DIR}/modules/tracktion_engine")
 
 # -----------------------------------------------------------------------------
 #  Application
@@ -52,7 +56,10 @@ target_sources(GospelProductionStudio PRIVATE
     Source/SongLibrary.cpp
     Source/MemoRecorder.cpp
     Source/SongListPanel.cpp
-    Source/SongEditor.cpp)
+    Source/SongEditor.cpp
+    Source/ClickSounds.cpp
+    Source/StudioEngine.cpp
+    Source/StudioPage.cpp)
 
 target_include_directories(GospelProductionStudio PRIVATE Source)
 
@@ -60,6 +67,10 @@ target_compile_definitions(GospelProductionStudio PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
+    JUCE_PLUGINHOST_VST3=1
+    JUCE_MODAL_LOOPS_PERMITTED=1
+    JUCE_STRICT_REFCOUNTEDPOINTER=1
+    TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:GospelProductionStudio,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:GospelProductionStudio,JUCE_VERSION>")
 
@@ -76,8 +87,29 @@ if(GPS_ENABLE_ASIO)
         "${CMAKE_CURRENT_SOURCE_DIR}/libs/asiosdk/common")
 endif()
 
+# Linux is only used for Claude's pre-checks before each GitHub build.
+target_compile_definitions(GospelProductionStudio PRIVATE
+    $<$<PLATFORM_ID:Linux>:JUCE_ALSA=0>
+    $<$<PLATFORM_ID:Linux>:JUCE_JACK=0>
+    $<$<PLATFORM_ID:Linux>:JUCE_USE_XRANDR=0>
+    $<$<PLATFORM_ID:Linux>:JUCE_USE_XINERAMA=0>
+    $<$<PLATFORM_ID:Linux>:JUCE_USE_XCURSOR=0>
+    $<$<PLATFORM_ID:Linux>:JUCE_USE_XINPUT=0>)
+
+if(MSVC)
+    target_compile_options(GospelProductionStudio PRIVATE /bigobj /utf-8)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(GospelProductionStudio PRIVATE "-latomic")
+endif()
+
 target_link_libraries(GospelProductionStudio
     PRIVATE
+        tracktion::tracktion_core
+        tracktion::tracktion_graph
+        tracktion::tracktion_engine
+        juce::juce_audio_processors
         juce::juce_audio_utils
         juce::juce_audio_devices
         juce::juce_dsp

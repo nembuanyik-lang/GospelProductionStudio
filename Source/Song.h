@@ -35,6 +35,12 @@ struct Song
 
     bool matchesSearch (const juce::String& text) const;
 
+    // Music helpers
+    bool   isCompoundMeter() const;      // 6/8, 9/8, 12/8: tempo is counted in dotted quarters
+    double getEngineBpm() const;         // quarter-note BPM for the engine
+    int    getKeyPitchClass() const;     // C = 0 ... B = 11
+    bool   isMinorKey() const;
+
     // Fixed choices shown in the editor
     static juce::StringArray statuses();
     static juce::StringArray themes();

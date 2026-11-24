@@ -1,6 +1,6 @@
 # Gospel Production Studio
 
-**Current build: Stage 1, Step 3 (Song Library)**, version 0.2.0
+**Current build: Stage 1, Step 4 (Transport, metronome, tempo and key)**, version 0.3.0. Runs on Tracktion Engine.
 
 Stage 0 set up the GitHub build and produced the first version of the studio: the **Studio Shell**. It opens with the professional interface, connects to your audio device, plays a test tone, and detects your keyboard (YPT-240), which you can then play.
 
@@ -31,6 +31,31 @@ For each new step, upload the changed files Claude sends and run the workflow ag
 ### Optional: build on the laptop
 
 `setup.bat` and `build.bat` build the studio locally. This needs Visual Studio Community with **Desktop development with C++** and **C++ CMake tools**, plus Git for Windows. It is only needed for fast testing later; GitHub is the normal route.
+
+---
+
+## Stage 1, Step 4 test: Studio (transport, metronome, tempo, key)
+
+Open a song in the Song Library and click **Open in Studio**.
+
+| # | Test | Pass when |
+|---|------|-----------|
+| 1 | Open in Studio | The Studio tab opens with the song's title, key, time signature and tempo |
+| 2 | Play / Stop | Play (Space) counts bars and beats (1.1, 1.2...) and the beat lights move; Stop halts; Stop again returns to 1.1 |
+| 3 | Metronome | The click is heard in time; beat 1 sounds higher and louder when "Accent beat 1" is on |
+| 4 | Click sounds | Click, Woodblock, Rim and Cowbell each sound different; the volume slider works |
+| 5 | Tempo | Changing tempo changes the click speed at once; the Song Library shows the new tempo |
+| 6 | Tap tempo | Tapping Tap 4 times in time sets the tempo |
+| 7 | 6/8 and 12/8 | 6/8 shows 6 beats (1 and 4 larger) and clicks all six; tempo is counted in dotted quarters |
+| 8 | Key | Changing the key here updates the song in the Library (and the other way round) |
+| 9 | Keyboard | The YPT-240 and the on-screen keys play the Studio Keys sound on every page |
+| 10 | Record | Record (R) gives the count-in (1 bar by default), then records what you play on the keyboard |
+| 11 | Playback | After stopping, Play from the start plays back what you recorded |
+| 12 | Loop | Loop (L) repeats bars 1 to 4 (or the bars you set) |
+| 13 | Clear Takes | Removes the recorded takes after asking |
+| 14 | Saved | Close and reopen the app, open the song in the Studio: tempo, metronome settings and takes are kept |
+
+The timeline that shows your takes as notes arrives in Step 5. The Song Library and Engine & Devices tests from earlier steps still apply.
 
 ---
 
@@ -101,6 +126,12 @@ GospelProductionStudio\
     SongEditor.*           song details, voice memo, lyrics
     SectionEditor.h        one lyrics section card
     LibraryPage.h          Song Library page
+    StudioEngine.*         Tracktion Engine: devices, song project, transport, metronome
+    StudioKeysPlugin.h     Studio Keys instrument inside the engine
+    ClickSounds.*          metronome sounds (click, woodblock, rim, cowbell)
+    StudioPage.*           Studio page: transport, tempo, key, metronome, loop
+    TransportButton.h      drawn transport buttons
+    Dialogs.h              confirmation boxes
     StudioLookAndFeel.h    colours, fonts and the professional theme
     LevelMeter.h           input and output meters
     StudioKeys.h           Stage 0 test instrument (replaced in Step 8)
@@ -112,4 +143,4 @@ GospelProductionStudio\
 
 ## What comes next
 
-**Stage 1, Step 4: Transport, metronome, tempo and key.** Play, stop, record and loop controls, a click with count-in, and the song's tempo and key driving the session.
+**Stage 1, Step 5: Tracks and timeline.** A real arrangement view: tracks you can add and name, a bar ruler, the playhead, and your recorded takes shown as clips.

@@ -89,17 +89,19 @@ bool MemoRecorder::startRecording (const juce::File& file)
     file.getParentDirectory().createDirectory();
     file.deleteFile();
 
-    std::unique_ptr<juce::FileOutputStream> stream (file.createOutputStream());
-    if (stream == nullptr)
+    std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream> (file);
+    if (! static_cast<juce::FileOutputStream*> (stream.get())->openedOk())
         return false;
 
     juce::WavAudioFormat wav;
-    auto* writer = wav.createWriterFor (stream.get(), sampleRate, 1, 24, {}, 0);
+    auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions{}
+                                                   .withSampleRate (sampleRate)
+                                                   .withNumChannels (1)
+                                                   .withBitsPerSample (24));
     if (writer == nullptr)
         return false;
 
-    stream.release();   // the writer now owns the stream
-    threadedWriter = std::make_unique<juce::AudioFormatWriter::ThreadedWriter> (writer, writerThread, 32768);
+    threadedWriter = std::make_unique<juce::AudioFormatWriter::ThreadedWriter> (writer.release(), writerThread, 32768);
 
     samplesRecorded.store (0);
     {

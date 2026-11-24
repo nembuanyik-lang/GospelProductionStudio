@@ -3,60 +3,49 @@
 //==============================================================================
 MainComponent::MainComponent()
 {
-    // ---- Settings file (remembers audio device, MIDI choices) ---------------
-    juce::PropertiesFile::Options options;
-    options.applicationName     = "GospelProductionStudio";
-    options.filenameSuffix      = ".settings";
-    options.folderName          = "GospelProductionStudio";
-    options.osxLibrarySubFolder = "Application Support";
-    settings = std::make_unique<juce::PropertiesFile> (options);
-
-    // ---- Test instrument ----------------------------------------------------
-    for (int i = 0; i < 24; ++i)
-        synth.addVoice (new StudioKeysVoice());
-    synth.addSound (new StudioKeysSound());
-
-    // ---- On-screen 88-key keyboard ------------------------------------------
-    keyboard.setAvailableRange (21, 108);
-    keyboard.setOctaveForMiddleC (4);
-    keyboard.setScrollButtonsVisible (false);
-    addAndMakeVisible (keyboard);
-
     // ---- Pages --------------------------------------------------------------
-    addChildComponent (libraryPage);
+    libraryPage.onOpenInStudio = [this] (const juce::String& id)
+    {
+        studioPage.openSong (id);
+        showPage (Page::studio);
+    };
+    libraryPage.onSongDeleted = [this] (const juce::String& id) { studioPage.songWasDeleted (id); };
 
-    for (auto* tab : { &libraryTab, &engineTab })
+    addChildComponent (libraryPage);
+    addChildComponent (studioPage);
+
+    for (auto* tab : { &libraryTab, &studioTab, &engineTab })
     {
         tab->setClickingTogglesState (true);
         tab->setRadioGroupId (1001);
+        tab->setWantsKeyboardFocus (false);
         addAndMakeVisible (tab);
     }
     libraryTab.onClick = [this] { showPage (Page::library); };
+    studioTab.onClick  = [this] { showPage (Page::studio); };
     engineTab.onClick  = [this] { showPage (Page::engine); };
 
-    // ---- Buttons ------------------------------------------------------------
+    setupButton.setWantsKeyboardFocus (false);
     setupButton.onClick = [this] { showAudioSettings(); };
     addAndMakeVisible (setupButton);
 
+    // ---- 88-key keyboard ----------------------------------------------------
+    keyboard.setAvailableRange (21, 108);
+    keyboard.setOctaveForMiddleC (4);
+    keyboard.setScrollButtonsVisible (false);
+    keyboard.setMidiChannel (StudioEngine::onScreenChannel);
+    keyboard.setWantsKeyboardFocus (false);
+    addAndMakeVisible (keyboard);
+
+    // ---- Engine & Devices page ----------------------------------------------
     toneButton.setClickingTogglesState (true);
-    toneButton.onClick = [this] { toneOn.store (toneButton.getToggleState()); };
-    addAndMakeVisible (toneButton);
-
+    toneButton.onClick = [this] { studio.setTestTone (toneButton.getToggleState()); };
     panicButton.onClick = [this] { allNotesOff(); };
-    addAndMakeVisible (panicButton);
+    for (juce::Component* c : { (juce::Component*) &toneButton, (juce::Component*) &panicButton,
+                                (juce::Component*) &inputMeter, (juce::Component*) &outputMeter })
+        addChildComponent (c);
 
-    addAndMakeVisible (inputMeter);
-    addAndMakeVisible (outputMeter);
-
-    // ---- Audio device: restore last setup, 2 in / 2 out ---------------------
-    auto savedSetup = settings->getXmlValue ("audioSetup");
-    setAudioChannels (2, 2, savedSetup.get());
-
-    // ---- MIDI: listen to every connected keyboard ---------------------------
-    deviceManager.addMidiInputDeviceCallback ({}, &midiCollector);
-    enableNewMidiInputs();
-    midiListConnection = juce::MidiDeviceListConnection::make ([this] { enableNewMidiInputs(); });
-
+    setWantsKeyboardFocus (true);
     showPage (Page::library);
     setSize (1280, 800);
     startTimerHz (30);
@@ -66,98 +55,8 @@ MainComponent::~MainComponent()
 {
     stopTimer();
     libraryPage.flush();
-    memoRecorder.stopRecording();
-    memoRecorder.stopPlayback();
-    saveSettings();
-    deviceManager.removeMidiInputDeviceCallback ({}, &midiCollector);
-    shutdownAudio();
 }
 
-//==============================================================================
-//  Audio
-//==============================================================================
-void MainComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRate)
-{
-    currentSampleRate = sampleRate;
-    tonePhase = 0.0;
-    synth.setCurrentPlaybackSampleRate (sampleRate);
-    midiCollector.reset (sampleRate);
-    memoRecorder.prepare (sampleRate, samplesPerBlockExpected);
-}
-
-void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
-{
-    auto& buffer = *info.buffer;
-
-    // 1. Measure the input (microphone / guitar) before clearing it.
-    float inPeak = 0.0f;
-    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-        inPeak = juce::jmax (inPeak, buffer.getMagnitude (ch, info.startSample, info.numSamples));
-
-    if (inPeak > inputPeak.load())
-        inputPeak.store (inPeak);
-
-    // Voice memo recording takes the input before it is cleared.
-    memoRecorder.processInput (buffer, info.startSample, info.numSamples);
-
-    // No live input monitoring in Stage 0: output starts silent.
-    info.clearActiveBufferRegion();
-
-    // 2. MIDI from the keyboard(s) and the on-screen keys.
-    juce::MidiBuffer incomingMidi;
-    midiCollector.removeNextBlockOfMessages (incomingMidi, info.numSamples);
-
-    for (const auto metadata : incomingMidi)
-    {
-        const auto message = metadata.getMessage();
-        if (message.isNoteOn())
-        {
-            lastNote.store (message.getNoteNumber());
-            lastVelocity.store (message.getVelocity());
-        }
-        midiEventCount.fetch_add (1);
-    }
-
-    keyboardState.processNextMidiBuffer (incomingMidi, info.startSample, info.numSamples, true);
-    synth.renderNextBlock (buffer, incomingMidi, info.startSample, info.numSamples);
-
-    // 3. Test tone: A 440 Hz sine at -18 dBFS.
-    if (toneOn.load())
-    {
-        const auto delta = juce::MathConstants<double>::twoPi * 440.0 / currentSampleRate;
-        const auto gain  = juce::Decibels::decibelsToGain (-18.0f);
-
-        for (int i = 0; i < info.numSamples; ++i)
-        {
-            const auto sample = gain * (float) std::sin (tonePhase);
-            tonePhase += delta;
-            if (tonePhase >= juce::MathConstants<double>::twoPi)
-                tonePhase -= juce::MathConstants<double>::twoPi;
-
-            for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-                buffer.addSample (ch, info.startSample + i, sample);
-        }
-    }
-
-    // 4. Voice memo playback.
-    memoRecorder.renderPlayback (buffer, info.startSample, info.numSamples);
-
-    // 5. Measure the output.
-    float outPeak = 0.0f;
-    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-        outPeak = juce::jmax (outPeak, buffer.getMagnitude (ch, info.startSample, info.numSamples));
-
-    if (outPeak > outputPeak.load())
-        outputPeak.store (outPeak);
-}
-
-void MainComponent::releaseResources()
-{
-    memoRecorder.release();
-}
-
-//==============================================================================
-//  Pages
 //==============================================================================
 void MainComponent::showPage (Page newPage)
 {
@@ -165,49 +64,45 @@ void MainComponent::showPage (Page newPage)
         libraryPage.flush();
 
     page = newPage;
+
+    libraryTab.setToggleState (page == Page::library, juce::dontSendNotification);
+    studioTab.setToggleState (page == Page::studio, juce::dontSendNotification);
+    engineTab.setToggleState (page == Page::engine, juce::dontSendNotification);
+
+    libraryPage.setVisible (page == Page::library);
+    studioPage.setVisible (page == Page::studio);
+
     const auto isEngine = page == Page::engine;
-
-    libraryTab.setToggleState (! isEngine, juce::dontSendNotification);
-    engineTab.setToggleState (isEngine, juce::dontSendNotification);
-
-    libraryPage.setVisible (! isEngine);
-    for (auto* c : { (juce::Component*) &toneButton, (juce::Component*) &panicButton,
-                     (juce::Component*) &inputMeter, (juce::Component*) &outputMeter })
+    for (juce::Component* c : { (juce::Component*) &toneButton, (juce::Component*) &panicButton,
+                                (juce::Component*) &inputMeter, (juce::Component*) &outputMeter })
         c->setVisible (isEngine);
 
     resized();
     repaint();
+
+    if (page == Page::studio)
+        studioPage.grabKeyboardFocus();
 }
 
-//==============================================================================
-//  Devices and settings
-//==============================================================================
-void MainComponent::enableNewMidiInputs()
+bool MainComponent::keyPressed (const juce::KeyPress& key)
 {
-    // Switch on any keyboard that appears (plugged in now or later).
-    // Devices the user switched off in the setup window stay off.
-    for (const auto& device : juce::MidiInput::getAvailableDevices())
-    {
-        if (! knownMidiInputs.contains (device.identifier))
-        {
-            knownMidiInputs.add (device.identifier);
-            deviceManager.setMidiInputDeviceEnabled (device.identifier, true);
-        }
-    }
+    if (page == Page::studio)
+        return studioPage.handleShortcut (key);
 
-    repaint();
+    return false;
 }
 
 void MainComponent::showAudioSettings()
 {
-    auto* selector = new juce::AudioDeviceSelectorComponent (deviceManager,
+    // MIDI keyboards are handled by the engine automatically, so only audio is shown here.
+    auto* selector = new juce::AudioDeviceSelectorComponent (studio.getAudioDeviceManager(),
                                                              0, 2,     // inputs
                                                              2, 2,     // outputs
-                                                             true,     // MIDI inputs
+                                                             false,    // MIDI inputs
                                                              false,    // MIDI output
                                                              true,     // stereo pairs
                                                              false);   // show advanced
-    selector->setSize (600, 480);
+    selector->setSize (600, 420);
 
     juce::DialogWindow::LaunchOptions dialog;
     dialog.content.setOwned (selector);
@@ -219,41 +114,31 @@ void MainComponent::showAudioSettings()
     dialog.launchAsync();
 }
 
-void MainComponent::saveSettings()
-{
-    if (auto state = deviceManager.createStateXml())
-        settings->setValue ("audioSetup", state.get());
-
-    settings->saveIfNeeded();
-}
-
 void MainComponent::allNotesOff()
 {
     for (int channel = 1; channel <= 16; ++channel)
-        keyboardState.allNotesOff (channel);
-
-    synth.allNotesOff (0, false);
+        studio.getKeyboardState().allNotesOff (channel);
 
     toneButton.setToggleState (false, juce::dontSendNotification);
-    toneOn.store (false);
+    studio.setTestTone (false);
 }
 
-//==============================================================================
-//  Screen
-//==============================================================================
 void MainComponent::timerCallback()
 {
-    // Peak hold with smooth fall-off.
-    shownInput  = juce::jmax (inputPeak.exchange (0.0f),  shownInput  * 0.85f);
-    shownOutput = juce::jmax (outputPeak.exchange (0.0f), shownOutput * 0.85f);
-
-    inputMeter.setLevel (shownInput);
-    outputMeter.setLevel (shownOutput);
+    shownInput  = juce::jmax (studio.getInputLevel(),  shownInput  * 0.85f);
+    shownOutput = juce::jmax (studio.getOutputLevel(), shownOutput * 0.85f);
 
     if (page == Page::engine)
+    {
+        inputMeter.setLevel (shownInput);
+        outputMeter.setLevel (shownOutput);
         repaint (0, 0, getWidth(), keyboard.getY());
+    }
 }
 
+//==============================================================================
+//  Drawing
+//==============================================================================
 void MainComponent::drawCard (juce::Graphics& g, juce::Rectangle<int> area, const juce::String& title) const
 {
     using namespace StudioColours;
@@ -306,18 +191,39 @@ void MainComponent::paint (juce::Graphics& g)
     g.setFont (studioFont (24.0f, true));
     g.drawText ("Gospel Production Studio", titleArea.removeFromTop (44).withTrimmedTop (10),
                 juce::Justification::bottomLeft);
+
+    const auto dot = juce::String::fromUTF8 ("  \xc2\xb7  ");
     g.setColour (gold);
     g.setFont (studioFont (13.0f));
-    g.drawText (juce::String::fromUTF8 (page == Page::library ? "STAGE 1  \xc2\xb7  SONG LIBRARY" : "STAGE 0  \xc2\xb7  ENGINE & DEVICES"), titleArea, juce::Justification::topLeft);
+    g.drawText (page == Page::library ? "STAGE 1" + dot + "SONG LIBRARY"
+              : page == Page::studio  ? "STAGE 1" + dot + "STUDIO"
+                                      : "STAGE 0" + dot + "ENGINE & DEVICES",
+                titleArea, juce::Justification::topLeft);
 
     if (page == Page::engine)
-    {
+        paintEnginePage (g);
+
+    // ---- Footer -------------------------------------------------------------
+    g.setColour (header);
+    g.fillRect (footerArea);
+    g.setColour (textDim);
+    g.setFont (studioFont (12.0f));
+    g.drawText ("Stage 1" + dot + "Step 4 of 22" + dot + "Transport, metronome, tempo and key",
+                footerArea.reduced (24, 0), juce::Justification::centredLeft);
+    g.drawText ("v" + juce::String (JUCE_APPLICATION_VERSION_STRING),
+                footerArea.reduced (24, 0), juce::Justification::centredRight);
+}
+
+void MainComponent::paintEnginePage (juce::Graphics& g)
+{
+    using namespace StudioColours;
+
     // ---- Audio engine card --------------------------------------------------
     drawCard (g, audioCard, "Audio Engine");
     {
         auto rows = audioCard.reduced (20, 0).withTrimmedTop (56).withTrimmedBottom (16);
 
-        if (auto* device = deviceManager.getCurrentAudioDevice())
+        if (auto* device = studio.getAudioDeviceManager().getCurrentAudioDevice())
         {
             const auto sr      = device->getCurrentSampleRate();
             const auto buffer  = device->getCurrentBufferSizeSamples();
@@ -325,9 +231,10 @@ void MainComponent::paint (juce::Graphics& g)
                                                     + device->getOutputLatencyInSamples()
                                                     + 2 * buffer) / sr
                                         : 0.0;
-            const auto cpu     = deviceManager.getCpuUsage() * 100.0;
+            const auto cpu     = studio.getCpuUsage() * 100.0;
 
             drawRow (g, rows, "Status",      "Running", good);
+            drawRow (g, rows, "Engine",      "Tracktion Engine", text);
             drawRow (g, rows, "Driver",      device->getTypeName(), text);
             drawRow (g, rows, "Device",      device->getName(), text);
             drawRow (g, rows, "Sample rate", juce::String (sr / 1000.0, 1) + " kHz", text);
@@ -351,33 +258,29 @@ void MainComponent::paint (juce::Graphics& g)
     drawCard (g, midiCard, "MIDI Keyboards");
     {
         auto rows = midiCard.reduced (20, 0).withTrimmedTop (56).withTrimmedBottom (16);
-        const auto devices = juce::MidiInput::getAvailableDevices();
+        const auto devices = studio.getPhysicalMidiInputs();
 
-        if (devices.isEmpty())
+        if (devices.empty())
         {
             drawRow (g, rows, "Keyboard", "None detected", warn);
             g.setColour (textDim);
             g.setFont (studioFont (13.5f));
-            g.drawFittedText ("Connect the keyboard with a USB cable. It appears here automatically.",
+            g.drawFittedText ("Connect the keyboard with a USB cable. It appears here within a few seconds.",
                               rows.removeFromTop (50), juce::Justification::centredLeft, 3);
         }
         else
         {
-            for (const auto& device : devices)
-            {
-                const auto enabled = deviceManager.isMidiInputDeviceEnabled (device.identifier);
-                drawRow (g, rows, device.name, enabled ? "Connected" : "Switched off",
-                         enabled ? good : textDim);
-            }
+            for (const auto& d : devices)
+                drawRow (g, rows, d.name, d.enabled ? "Connected" : "Switched off", d.enabled ? good : textDim);
         }
 
-        const auto note = lastNote.load();
+        const auto note = studio.getLastNote();
         drawRow (g, rows, "Last note played",
                  note >= 0 ? juce::MidiMessage::getMidiNoteName (note, true, true, 4)
-                               + "   (velocity " + juce::String (lastVelocity.load()) + ")"
+                               + "   (velocity " + juce::String (studio.getLastVelocity()) + ")"
                            : juce::String ("Play a key..."),
                  note >= 0 ? gold : textDim);
-        drawRow (g, rows, "MIDI messages received", juce::String (midiEventCount.load()), text);
+        drawRow (g, rows, "Notes received", juce::String (studio.getMidiMessageCount()), text);
     }
 
     // ---- Levels card --------------------------------------------------------
@@ -397,18 +300,6 @@ void MainComponent::paint (juce::Graphics& g)
         g.setColour (text);
         g.drawText (dbText (outputMeter.getLevelDb()), outputLabelArea, juce::Justification::centredRight);
     }
-
-    }
-
-    // ---- Footer -------------------------------------------------------------
-    g.setColour (header);
-    g.fillRect (footerArea);
-    g.setColour (textDim);
-    g.setFont (studioFont (12.0f));
-    g.drawText (juce::String::fromUTF8 ("Stage 1  \xc2\xb7  Step 3 of 22  \xc2\xb7  Songs saved in Documents\\Gospel Production Studio\\Songs"),
-                footerArea.reduced (24, 0), juce::Justification::centredLeft);
-    g.drawText ("v" + juce::String (JUCE_APPLICATION_VERSION_STRING),
-                footerArea.reduced (24, 0), juce::Justification::centredRight);
 }
 
 void MainComponent::resized()
@@ -418,21 +309,22 @@ void MainComponent::resized()
     headerArea = area.removeFromTop (76);
     footerArea = area.removeFromBottom (30);
 
-    // Header: title on the left, page tabs, setup on the right.
     auto headerInner = headerArea.reduced (24, 20);
     setupButton.setBounds (headerInner.removeFromRight (200));
     headerInner.removeFromLeft (340);
-    libraryTab.setBounds (headerInner.removeFromLeft (150));
-    headerInner.removeFromLeft (8);
-    engineTab.setBounds (headerInner.removeFromLeft (170));
+    for (auto* tab : { &libraryTab, &studioTab, &engineTab })
+    {
+        tab->setBounds (headerInner.removeFromLeft (tab == &engineTab ? 170 : 140));
+        headerInner.removeFromLeft (8);
+    }
 
     // Keyboard along the bottom: 52 white keys across the full width.
-    // Smaller on the Song Library page to leave room for lyrics.
-    auto keyboardArea = area.removeFromBottom (page == Page::library ? 96 : 140).reduced (24, 10);
+    auto keyboardArea = area.removeFromBottom (page == Page::engine ? 140 : 96).reduced (24, 10);
     keyboard.setBounds (keyboardArea);
     keyboard.setKeyWidth ((float) keyboardArea.getWidth() / 52.0f);
 
     libraryPage.setBounds (area);
+    studioPage.setBounds (area);
 
     // Engine & Devices: three cards.
     auto body = area.reduced (24, 20);
@@ -445,14 +337,11 @@ void MainComponent::resized()
     body.removeFromLeft (gap);
     levelCard = body;
 
-    // Levels card contents.
     auto inner = levelCard.reduced (20, 0).withTrimmedTop (60).withTrimmedBottom (20);
-
     inputLabelArea = inner.removeFromTop (24);
     inner.removeFromTop (6);
     inputMeter.setBounds (inner.removeFromTop (18));
     inner.removeFromTop (22);
-
     outputLabelArea = inner.removeFromTop (24);
     inner.removeFromTop (6);
     outputMeter.setBounds (inner.removeFromTop (18));

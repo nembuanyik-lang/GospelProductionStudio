@@ -25,7 +25,19 @@ public:
             editor.focusTitle();
         };
 
-        editor.onSongDeleted = [this] { listPanel.selectFirst(); };
+        editor.onSongDeleted = [this] (const juce::String& id)
+        {
+            if (onSongDeleted)
+                onSongDeleted (id);
+            juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<LibraryPage> (this)]
+                                             { if (safe != nullptr) safe->listPanel.selectFirst(); });
+        };
+
+        editor.onOpenInStudio = [this] (const juce::String& id)
+        {
+            if (onOpenInStudio)
+                onOpenInStudio (id);
+        };
 
         addAndMakeVisible (listPanel);
         addAndMakeVisible (editor);
@@ -34,6 +46,8 @@ public:
     }
 
     void flush()   { editor.flush(); }
+
+    std::function<void (const juce::String& id)> onOpenInStudio, onSongDeleted;
 
     void resized() override
     {

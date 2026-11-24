@@ -76,6 +76,34 @@ bool Song::matchesSearch (const juce::String& text) const
 }
 
 //==============================================================================
+bool Song::isCompoundMeter() const
+{
+    return timeSignature == "6/8" || timeSignature == "9/8" || timeSignature == "12/8";
+}
+
+double Song::getEngineBpm() const
+{
+    return isCompoundMeter() ? tempo * 1.5 : (double) tempo;
+}
+
+int Song::getKeyPitchClass() const
+{
+    static const juce::StringArray names { "C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B" };
+    static const juce::StringArray alternatives { "B#", "C#", "D", "D#", "Fb", "E#", "Gb", "G", "G#", "A", "A#", "Cb" };
+
+    const auto root = key.upToFirstOccurrenceOf (" ", false, false).trim();
+    auto index = names.indexOf (root);
+    if (index < 0)
+        index = alternatives.indexOf (root);
+    return juce::jmax (0, index);
+}
+
+bool Song::isMinorKey() const
+{
+    return key.containsIgnoreCase ("minor");
+}
+
+//==============================================================================
 juce::StringArray Song::statuses()
 {
     return { "Idea", "Written", "Arranged", "Recorded", "Mixed", "Released" };
@@ -101,7 +129,7 @@ juce::StringArray Song::keys()
 
 juce::StringArray Song::timeSignatures()
 {
-    return { "4/4", "3/4", "6/8", "12/8", "2/4" };
+    return { "4/4", "3/4", "6/8", "12/8", "2/4", "9/8" };
 }
 
 juce::StringArray Song::sectionTypes()

@@ -3,94 +3,64 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "StudioLookAndFeel.h"
 #include "LevelMeter.h"
-#include "StudioKeys.h"
+#include "StudioEngine.h"
 #include "SongLibrary.h"
-#include "MemoRecorder.h"
 #include "LibraryPage.h"
+#include "StudioPage.h"
 
 //==============================================================================
 //  Main window content.
 //
-//  Pages:  Song Library (Stage 1, Step 3)  |  Engine & Devices (Stage 0)
-//
-//  Engine & Devices proves the foundation works on the real computer:
-//    - audio device opens (laptop sound now, audio interface later)
-//    - test tone plays through speakers / headphones
-//    - MIDI keyboard (YPT-240) is detected, lights the on-screen keys and sounds
-//    - input meter moves when the microphone is connected
-//    - settings are remembered between sessions
+//  Pages:  Song Library  |  Studio  |  Engine & Devices
+//  The 88-key keyboard along the bottom plays the Keys track on every page.
 //==============================================================================
-class MainComponent final : public juce::AudioAppComponent,
+class MainComponent final : public juce::Component,
                             private juce::Timer
 {
 public:
     MainComponent();
     ~MainComponent() override;
 
-    //==========================================================================
-    void prepareToPlay (int samplesPerBlockExpected, double sampleRate) override;
-    void getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill) override;
-    void releaseResources() override;
-
-    //==========================================================================
     void paint (juce::Graphics&) override;
     void resized() override;
+    bool keyPressed (const juce::KeyPress&) override;
 
 private:
+    enum class Page { library, studio, engine };
+
+    void showPage (Page);
     void timerCallback() override;
     void showAudioSettings();
-    void enableNewMidiInputs();
-    void saveSettings();
     void allNotesOff();
-
-    enum class Page { library, engine };
-    void showPage (Page);
+    void paintEnginePage (juce::Graphics&);
 
     void drawCard (juce::Graphics&, juce::Rectangle<int> area, const juce::String& title) const;
     void drawRow (juce::Graphics&, juce::Rectangle<int>& area, const juce::String& label,
                   const juce::String& value, juce::Colour valueColour) const;
 
     //==========================================================================
-    std::unique_ptr<juce::PropertiesFile> settings;
-
+    // Order matters: the engine is created first and destroyed last.
+    StudioEngine studio;
     SongLibrary  songLibrary;
-    MemoRecorder memoRecorder;
-    LibraryPage  libraryPage { songLibrary, memoRecorder };
+    LibraryPage  libraryPage { songLibrary, studio.getMemo() };
+    StudioPage   studioPage  { studio, songLibrary };
     Page         page = Page::library;
+
+    juce::MidiKeyboardComponent keyboard { studio.getKeyboardState(), juce::MidiKeyboardComponent::horizontalKeyboard };
+
+    juce::TextButton libraryTab  { "Song Library" };
+    juce::TextButton studioTab   { "Studio" };
+    juce::TextButton engineTab   { "Engine & Devices" };
+    juce::TextButton setupButton { "Audio & MIDI Setup" };
+
+    // Engine & Devices page
+    juce::TextButton toneButton  { "Test Tone  (A 440 Hz)" };
+    juce::TextButton panicButton { "All Notes Off" };
+    LevelMeter inputMeter, outputMeter;
+    float shownInput = 0.0f, shownOutput = 0.0f;
 
     juce::TooltipWindow tooltips { this, 600 };
 
-    juce::MidiKeyboardState     keyboardState;
-    juce::MidiKeyboardComponent keyboard { keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard };
-    juce::MidiMessageCollector  midiCollector;
-    juce::Synthesiser           synth;
-
-    juce::StringArray            knownMidiInputs;
-    juce::MidiDeviceListConnection midiListConnection;
-
-    juce::TextButton libraryTab  { "Song Library" };
-    juce::TextButton engineTab   { "Engine & Devices" };
-    juce::TextButton setupButton { "Audio & MIDI Setup" };
-    juce::TextButton toneButton  { "Test Tone  (A 440 Hz)" };
-    juce::TextButton panicButton { "All Notes Off" };
-
-    LevelMeter inputMeter, outputMeter;
-
-    //==========================================================================
-    // Shared between the audio thread and the screen
-    std::atomic<bool>  toneOn         { false };
-    std::atomic<float> inputPeak      { 0.0f };
-    std::atomic<float> outputPeak     { 0.0f };
-    std::atomic<int>   lastNote       { -1 };
-    std::atomic<int>   lastVelocity   { 0 };
-    std::atomic<int>   midiEventCount { 0 };
-
-    // Audio thread only
-    double tonePhase = 0.0;
-    double currentSampleRate = 44100.0;
-
-    // Screen only
-    float shownInput = 0.0f, shownOutput = 0.0f;
     juce::Rectangle<int> headerArea, footerArea, audioCard, midiCard, levelCard;
     juce::Rectangle<int> inputLabelArea, outputLabelArea;
 
