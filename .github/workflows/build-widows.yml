@@ -25,11 +25,16 @@ jobs:
           "number=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "Version $v"
 
-      - name: Download Tracktion Engine and JUCE
+      - name: Download Tracktion Engine and JUCE (tested version)
         shell: bash
         run: |
           git config --global url."https://github.com/".insteadOf "git@github.com:"
-          git clone --depth 1 --recurse-submodules https://github.com/Tracktion/tracktion_engine.git libs/tracktion_engine
+          git init -q libs/tracktion_engine
+          cd libs/tracktion_engine
+          git remote add origin https://github.com/Tracktion/tracktion_engine.git
+          git fetch -q --depth 1 origin be4a6a0c94cc59ebe6f7a0a02373567cb2c01cfb
+          git checkout -q FETCH_HEAD
+          git submodule update --init --depth 1
 
       - name: Configure
         run: cmake -S . -B build -A x64
@@ -58,6 +63,5 @@ jobs:
           tag_name: v${{ steps.version.outputs.number }}-build${{ github.run_number }}
           name: Gospel Production Studio ${{ steps.version.outputs.number }} (build ${{ github.run_number }})
           body: |
-            Stage 0 - Studio Shell.
-            Download GospelProductionStudio-Setup-${{ steps.version.outputs.number }}.exe below, run it, then work through the Stage 0 test checklist in README.md.
+            Download GospelProductionStudio-Setup-${{ steps.version.outputs.number }}.exe below, run it, then work through the test checklist in README.md.
           files: dist/*.exe
