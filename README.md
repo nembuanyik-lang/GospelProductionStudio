@@ -1,8 +1,8 @@
 # Gospel Production Studio
 
-**Stage 0: Foundation and Setup** (Steps 1 and 2 of 22)
+**Current build: Stage 1, Step 3 (Song Library)**, version 0.2.0
 
-This stage sets up the GitHub build and produces the first version of the studio: the **Studio Shell**. It opens with the professional interface, connects to your audio device, plays a test tone, and detects your keyboard (YPT-240), which you can then play.
+Stage 0 set up the GitHub build and produced the first version of the studio: the **Studio Shell**. It opens with the professional interface, connects to your audio device, plays a test tone, and detects your keyboard (YPT-240), which you can then play.
 
 ---
 
@@ -34,7 +34,31 @@ For each new step, upload the changed files Claude sends and run the workflow ag
 
 ---
 
-## Stage 0 test (must pass before Stage 1)
+## Stage 1, Step 3 test: Song Library
+
+Your songs are saved in **Documents\\Gospel Production Studio\\Songs**, with one folder per song (song.json + memo.wav).
+
+| # | Test | Pass when |
+|---|------|-----------|
+| 1 | Opens on Library | The app opens on the **Song Library** tab; the **Engine & Devices** tab shows the Stage 0 cards |
+| 2 | New song | **+ New Song** adds "Untitled song" with today's date and puts the cursor in the title |
+| 3 | Details | Title, date, key, tempo, time signature, theme, status, scripture and notes can all be set |
+| 4 | Autosave | Edits save on their own within about 1 second; closing and reopening the app keeps everything |
+| 5 | Lyrics | Sections can be added (Verse, Chorus, Bridge, Vamp...), typed into, moved up/down and removed |
+| 6 | Numbering | Two verses show as "Verse 1" and "Verse 2" automatically |
+| 7 | Voice memo | **Record Memo** records from the mic, shows the timer; **Stop Recording** saves it; **Play** plays it back |
+| 8 | Replace memo | Recording again asks before replacing the old memo |
+| 9 | Search | Typing a word from the lyrics finds the song |
+| 10 | Filters | Status and theme filters narrow the list; the count shows "x of y songs" |
+| 11 | Status colours | The list shows a coloured status chip for each song |
+| 12 | Delete | **Delete Song** asks first, then moves the song to the Recycle Bin |
+| 13 | Ten songs | Enter 10 of your real received songs: the list stays fast and tidy |
+
+If the memo records silence, open **Audio & MIDI Setup** and choose the microphone input, and check Windows **Settings > Privacy > Microphone** allows desktop apps.
+
+---
+
+## Stage 0 test (Engine & Devices tab)
 
 Tick each item on **your own computer**.
 
@@ -70,7 +94,13 @@ GospelProductionStudio\
   setup.bat, build.bat     optional local build
   Source\
     Main.cpp               application and main window
-    MainComponent.*        Studio Shell screen, audio and MIDI
+    MainComponent.*        main window, pages, audio and MIDI
+    Song.*, SongLibrary.*  song data and safe saving
+    MemoRecorder.*         voice memo record and playback
+    SongListPanel.*        library list, search, filters
+    SongEditor.*           song details, voice memo, lyrics
+    SectionEditor.h        one lyrics section card
+    LibraryPage.h          Song Library page
     StudioLookAndFeel.h    colours, fonts and the professional theme
     LevelMeter.h           input and output meters
     StudioKeys.h           Stage 0 test instrument (replaced in Step 8)
@@ -82,4 +112,4 @@ GospelProductionStudio\
 
 ## What comes next
 
-**Stage 1, Step 3: Song library and lyrics editor.** Every received song gets its title, date, key, tempo, theme and lyrics, and each song can be opened as a project.
+**Stage 1, Step 4: Transport, metronome, tempo and key.** Play, stop, record and loop controls, a click with count-in, and the song's tempo and key driving the session.

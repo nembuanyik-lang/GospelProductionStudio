@@ -22,6 +22,18 @@ MainComponent::MainComponent()
     keyboard.setScrollButtonsVisible (false);
     addAndMakeVisible (keyboard);
 
+    // ---- Pages --------------------------------------------------------------
+    addChildComponent (libraryPage);
+
+    for (auto* tab : { &libraryTab, &engineTab })
+    {
+        tab->setClickingTogglesState (true);
+        tab->setRadioGroupId (1001);
+        addAndMakeVisible (tab);
+    }
+    libraryTab.onClick = [this] { showPage (Page::library); };
+    engineTab.onClick  = [this] { showPage (Page::engine); };
+
     // ---- Buttons ------------------------------------------------------------
     setupButton.onClick = [this] { showAudioSettings(); };
     addAndMakeVisible (setupButton);
@@ -45,6 +57,7 @@ MainComponent::MainComponent()
     enableNewMidiInputs();
     midiListConnection = juce::MidiDeviceListConnection::make ([this] { enableNewMidiInputs(); });
 
+    showPage (Page::library);
     setSize (1280, 800);
     startTimerHz (30);
 }
@@ -52,6 +65,9 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     stopTimer();
+    libraryPage.flush();
+    memoRecorder.stopRecording();
+    memoRecorder.stopPlayback();
     saveSettings();
     deviceManager.removeMidiInputDeviceCallback ({}, &midiCollector);
     shutdownAudio();
@@ -60,12 +76,13 @@ MainComponent::~MainComponent()
 //==============================================================================
 //  Audio
 //==============================================================================
-void MainComponent::prepareToPlay (int, double sampleRate)
+void MainComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRate)
 {
     currentSampleRate = sampleRate;
     tonePhase = 0.0;
     synth.setCurrentPlaybackSampleRate (sampleRate);
     midiCollector.reset (sampleRate);
+    memoRecorder.prepare (sampleRate, samplesPerBlockExpected);
 }
 
 void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
@@ -79,6 +96,9 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
 
     if (inPeak > inputPeak.load())
         inputPeak.store (inPeak);
+
+    // Voice memo recording takes the input before it is cleared.
+    memoRecorder.processInput (buffer, info.startSample, info.numSamples);
 
     // No live input monitoring in Stage 0: output starts silent.
     info.clearActiveBufferRegion();
@@ -119,7 +139,10 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
         }
     }
 
-    // 4. Measure the output.
+    // 4. Voice memo playback.
+    memoRecorder.renderPlayback (buffer, info.startSample, info.numSamples);
+
+    // 5. Measure the output.
     float outPeak = 0.0f;
     for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
         outPeak = juce::jmax (outPeak, buffer.getMagnitude (ch, info.startSample, info.numSamples));
@@ -128,7 +151,33 @@ void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& info)
         outputPeak.store (outPeak);
 }
 
-void MainComponent::releaseResources() {}
+void MainComponent::releaseResources()
+{
+    memoRecorder.release();
+}
+
+//==============================================================================
+//  Pages
+//==============================================================================
+void MainComponent::showPage (Page newPage)
+{
+    if (page == Page::library && newPage != Page::library)
+        libraryPage.flush();
+
+    page = newPage;
+    const auto isEngine = page == Page::engine;
+
+    libraryTab.setToggleState (! isEngine, juce::dontSendNotification);
+    engineTab.setToggleState (isEngine, juce::dontSendNotification);
+
+    libraryPage.setVisible (! isEngine);
+    for (auto* c : { (juce::Component*) &toneButton, (juce::Component*) &panicButton,
+                     (juce::Component*) &inputMeter, (juce::Component*) &outputMeter })
+        c->setVisible (isEngine);
+
+    resized();
+    repaint();
+}
 
 //==============================================================================
 //  Devices and settings
@@ -201,7 +250,8 @@ void MainComponent::timerCallback()
     inputMeter.setLevel (shownInput);
     outputMeter.setLevel (shownOutput);
 
-    repaint (0, 0, getWidth(), keyboard.getY());
+    if (page == Page::engine)
+        repaint (0, 0, getWidth(), keyboard.getY());
 }
 
 void MainComponent::drawCard (juce::Graphics& g, juce::Rectangle<int> area, const juce::String& title) const
@@ -258,8 +308,10 @@ void MainComponent::paint (juce::Graphics& g)
                 juce::Justification::bottomLeft);
     g.setColour (gold);
     g.setFont (studioFont (13.0f));
-    g.drawText (juce::String::fromUTF8 ("STAGE 0  \xc2\xb7  STUDIO SHELL"), titleArea, juce::Justification::topLeft);
+    g.drawText (juce::String::fromUTF8 (page == Page::library ? "STAGE 1  \xc2\xb7  SONG LIBRARY" : "STAGE 0  \xc2\xb7  ENGINE & DEVICES"), titleArea, juce::Justification::topLeft);
 
+    if (page == Page::engine)
+    {
     // ---- Audio engine card --------------------------------------------------
     drawCard (g, audioCard, "Audio Engine");
     {
@@ -346,12 +398,14 @@ void MainComponent::paint (juce::Graphics& g)
         g.drawText (dbText (outputMeter.getLevelDb()), outputLabelArea, juce::Justification::centredRight);
     }
 
+    }
+
     // ---- Footer -------------------------------------------------------------
     g.setColour (header);
     g.fillRect (footerArea);
     g.setColour (textDim);
     g.setFont (studioFont (12.0f));
-    g.drawText (juce::String::fromUTF8 ("Stage 0  \xc2\xb7  Step 2 of 22  \xc2\xb7  Test instrument: Studio Keys"),
+    g.drawText (juce::String::fromUTF8 ("Stage 1  \xc2\xb7  Step 3 of 22  \xc2\xb7  Songs saved in Documents\\Gospel Production Studio\\Songs"),
                 footerArea.reduced (24, 0), juce::Justification::centredLeft);
     g.drawText ("v" + juce::String (JUCE_APPLICATION_VERSION_STRING),
                 footerArea.reduced (24, 0), juce::Justification::centredRight);
@@ -364,14 +418,23 @@ void MainComponent::resized()
     headerArea = area.removeFromTop (76);
     footerArea = area.removeFromBottom (30);
 
-    setupButton.setBounds (headerArea.reduced (24, 20).removeFromRight (210));
+    // Header: title on the left, page tabs, setup on the right.
+    auto headerInner = headerArea.reduced (24, 20);
+    setupButton.setBounds (headerInner.removeFromRight (200));
+    headerInner.removeFromLeft (340);
+    libraryTab.setBounds (headerInner.removeFromLeft (150));
+    headerInner.removeFromLeft (8);
+    engineTab.setBounds (headerInner.removeFromLeft (170));
 
     // Keyboard along the bottom: 52 white keys across the full width.
-    auto keyboardArea = area.removeFromBottom (140).reduced (24, 12);
+    // Smaller on the Song Library page to leave room for lyrics.
+    auto keyboardArea = area.removeFromBottom (page == Page::library ? 96 : 140).reduced (24, 10);
     keyboard.setBounds (keyboardArea);
     keyboard.setKeyWidth ((float) keyboardArea.getWidth() / 52.0f);
 
-    // Three cards.
+    libraryPage.setBounds (area);
+
+    // Engine & Devices: three cards.
     auto body = area.reduced (24, 20);
     const int gap = 18;
     const int cardWidth = (body.getWidth() - 2 * gap) / 3;

@@ -55,6 +55,25 @@ public:
         setColour (juce::PopupMenu::highlightedBackgroundColourId, gold);
         setColour (juce::PopupMenu::highlightedTextColourId,       header);
 
+        setColour (juce::TextEditor::backgroundColourId,     juce::Colour (0xff161920));
+        setColour (juce::TextEditor::textColourId,           text);
+        setColour (juce::TextEditor::outlineColourId,        cardBorder);
+        setColour (juce::TextEditor::focusedOutlineColourId, gold);
+        setColour (juce::TextEditor::highlightColourId,      gold.withAlpha (0.30f));
+        setColour (juce::TextEditor::highlightedTextColourId, text);
+        setColour (juce::CaretComponent::caretColourId,      gold);
+
+        setColour (juce::ListBox::backgroundColourId, card);
+        setColour (juce::ScrollBar::thumbColourId,    cardBorder.brighter (0.3f));
+
+        setColour (juce::Slider::textBoxTextColourId,       text);
+        setColour (juce::Slider::textBoxBackgroundColourId, juce::Colour (0xff161920));
+        setColour (juce::Slider::textBoxOutlineColourId,    cardBorder);
+
+        setColour (juce::AlertWindow::backgroundColourId, card);
+        setColour (juce::AlertWindow::textColourId,       text);
+        setColour (juce::AlertWindow::outlineColourId,    cardBorder);
+
         setColour (juce::ToggleButton::tickColourId, gold);
         setColour (juce::Slider::thumbColourId,      gold);
         setColour (juce::Slider::trackColourId,      goldDim);

@@ -1,10 +1,10 @@
 # =============================================================================
 #  Gospel Production Studio
-#  Stage 0 / Step 2 - Studio Shell
+#  Stage 1 / Step 3 - Song Library
 # =============================================================================
 cmake_minimum_required(VERSION 3.22)
 
-project(GospelProductionStudio VERSION 0.1.0 LANGUAGES C CXX)
+project(GospelProductionStudio VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -47,7 +47,12 @@ juce_add_gui_app(GospelProductionStudio
 
 target_sources(GospelProductionStudio PRIVATE
     Source/Main.cpp
-    Source/MainComponent.cpp)
+    Source/MainComponent.cpp
+    Source/Song.cpp
+    Source/SongLibrary.cpp
+    Source/MemoRecorder.cpp
+    Source/SongListPanel.cpp
+    Source/SongEditor.cpp)
 
 target_include_directories(GospelProductionStudio PRIVATE Source)
 

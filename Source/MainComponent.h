@@ -4,11 +4,16 @@
 #include "StudioLookAndFeel.h"
 #include "LevelMeter.h"
 #include "StudioKeys.h"
+#include "SongLibrary.h"
+#include "MemoRecorder.h"
+#include "LibraryPage.h"
 
 //==============================================================================
-//  Stage 0 / Step 2 - Studio Shell
+//  Main window content.
 //
-//  Proves the foundation works on the real computer:
+//  Pages:  Song Library (Stage 1, Step 3)  |  Engine & Devices (Stage 0)
+//
+//  Engine & Devices proves the foundation works on the real computer:
 //    - audio device opens (laptop sound now, audio interface later)
 //    - test tone plays through speakers / headphones
 //    - MIDI keyboard (YPT-240) is detected, lights the on-screen keys and sounds
@@ -38,12 +43,22 @@ private:
     void saveSettings();
     void allNotesOff();
 
+    enum class Page { library, engine };
+    void showPage (Page);
+
     void drawCard (juce::Graphics&, juce::Rectangle<int> area, const juce::String& title) const;
     void drawRow (juce::Graphics&, juce::Rectangle<int>& area, const juce::String& label,
                   const juce::String& value, juce::Colour valueColour) const;
 
     //==========================================================================
     std::unique_ptr<juce::PropertiesFile> settings;
+
+    SongLibrary  songLibrary;
+    MemoRecorder memoRecorder;
+    LibraryPage  libraryPage { songLibrary, memoRecorder };
+    Page         page = Page::library;
+
+    juce::TooltipWindow tooltips { this, 600 };
 
     juce::MidiKeyboardState     keyboardState;
     juce::MidiKeyboardComponent keyboard { keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard };
@@ -53,6 +68,8 @@ private:
     juce::StringArray            knownMidiInputs;
     juce::MidiDeviceListConnection midiListConnection;
 
+    juce::TextButton libraryTab  { "Song Library" };
+    juce::TextButton engineTab   { "Engine & Devices" };
     juce::TextButton setupButton { "Audio & MIDI Setup" };
     juce::TextButton toneButton  { "Test Tone  (A 440 Hz)" };
     juce::TextButton panicButton { "All Notes Off" };

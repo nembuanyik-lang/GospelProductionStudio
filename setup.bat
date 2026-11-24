@@ -27,12 +27,14 @@ if exist "libs\tracktion_engine\modules\juce\CMakeLists.txt" (
 )
 
 if exist "libs\tracktion_engine" (
+    git config --global url."https://github.com/".insteadOf "git@github.com:"
     echo  Finishing an earlier, incomplete download...
     git -C libs\tracktion_engine submodule update --init --recursive --depth 1
     if errorlevel 1 goto :fail
     goto :done
 )
 
+git config --global url."https://github.com/".insteadOf "git@github.com:"
 echo  Downloading Tracktion Engine and JUCE (about 300 MB, please wait)...
 git clone --depth 1 --recurse-submodules https://github.com/Tracktion/tracktion_engine.git libs\tracktion_engine
 if errorlevel 1 goto :fail
