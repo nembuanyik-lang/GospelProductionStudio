@@ -37,7 +37,7 @@ jobs:
           git submodule update --init --depth 1
 
       - name: Configure
-        run: cmake -S . -B build -A x64
+        run: cmake -S . -B build -A x64 -DGPS_BUILD_NUMBER=${{ github.run_number }} -DGPS_UPDATE_REPO=${{ github.repository }}
 
       - name: Build (Release)
         run: cmake --build build --config Release --parallel
@@ -62,6 +62,7 @@ jobs:
         with:
           tag_name: v${{ steps.version.outputs.number }}-build${{ github.run_number }}
           name: Gospel Production Studio ${{ steps.version.outputs.number }} (build ${{ github.run_number }})
+          make_latest: true
           body: |
             Download GospelProductionStudio-Setup-${{ steps.version.outputs.number }}.exe below, run it, then work through the test checklist in README.md.
           files: dist/*.exe
