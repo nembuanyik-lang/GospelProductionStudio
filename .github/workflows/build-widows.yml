@@ -27,7 +27,9 @@ jobs:
 
       - name: Download Tracktion Engine and JUCE
         shell: bash
-        run: git clone --depth 1 --recurse-submodules https://github.com/Tracktion/tracktion_engine.git libs/tracktion_engine
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git clone --depth 1 --recurse-submodules https://github.com/Tracktion/tracktion_engine.git libs/tracktion_engine
 
       - name: Configure
         run: cmake -S . -B build -A x64
