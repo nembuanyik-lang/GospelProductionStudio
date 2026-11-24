@@ -1,0 +1,61 @@
+name: Build Windows Installer
+
+# Run from the GitHub "Actions" tab: choose this workflow, then "Run workflow".
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Get project files
+        uses: actions/checkout@v4
+
+      - name: Read version from CMakeLists.txt
+        id: version
+        shell: pwsh
+        run: |
+          $m = Select-String -Path CMakeLists.txt -Pattern 'project\(GospelProductionStudio VERSION ([0-9.]+)'
+          $v = $m.Matches[0].Groups[1].Value
+          "number=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Version $v"
+
+      - name: Download Tracktion Engine and JUCE
+        shell: bash
+        run: git clone --depth 1 --recurse-submodules https://github.com/Tracktion/tracktion_engine.git libs/tracktion_engine
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build (Release)
+        run: cmake --build build --config Release --parallel
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Make installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.version.outputs.number }}" installer\GospelProductionStudio.iss
+          Get-ChildItem dist
+
+      - name: Keep installer as a download
+        uses: actions/upload-artifact@v4
+        with:
+          name: GospelProductionStudio-Setup-${{ steps.version.outputs.number }}
+          path: dist/*.exe
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.number }}-build${{ github.run_number }}
+          name: Gospel Production Studio ${{ steps.version.outputs.number }} (build ${{ github.run_number }})
+          body: |
+            Stage 0 - Studio Shell.
+            Download GospelProductionStudio-Setup-${{ steps.version.outputs.number }}.exe below, run it, then work through the Stage 0 test checklist in README.md.
+          files: dist/*.exe
