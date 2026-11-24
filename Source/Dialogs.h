@@ -26,10 +26,15 @@ namespace Dialogs
                                       });
     }
 
-    inline void message (juce::Component* parent, const juce::String& title, const juce::String& text)
+    inline void message (juce::Component* parent, const juce::String& title, const juce::String& text,
+                         juce::MessageBoxIconType icon = juce::MessageBoxIconType::WarningIcon)
     {
+        // Centre over the whole window, so narrow panels don't push the box off-screen.
+        if (parent != nullptr)
+            parent = parent->getTopLevelComponent();
+
         juce::AlertWindow::showAsync (juce::MessageBoxOptions{}
-                                          .withIconType (juce::MessageBoxIconType::WarningIcon)
+                                          .withIconType (icon)
                                           .withTitle (title)
                                           .withMessage (text)
                                           .withButton ("OK", 0)

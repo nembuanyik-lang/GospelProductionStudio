@@ -1,4 +1,6 @@
+#include "InstrumentPanel.h"
 #include "MainComponent.h"
+#include "Dialogs.h"
 
 //==============================================================================
 MainComponent::MainComponent()
@@ -29,6 +31,31 @@ MainComponent::MainComponent()
     setupButton.onClick = [this] { showAudioSettings(); };
     addAndMakeVisible (setupButton);
 
+    // ---- Updates ------------------------------------------------------------
+    updatesButton.setWantsKeyboardFocus (false);
+    updatesButton.setTooltip ("Check GitHub for a newer version (" + Updater::describeCurrent() + ")");
+    updatesButton.onClick = [this] { checkForUpdates (true); };
+    addAndMakeVisible (updatesButton);
+
+    soundsButton.setWantsKeyboardFocus (false);
+    soundsButton.setTooltip ("Download piano, bass and drum sounds (once)");
+    soundsButton.onClick = [] { SoundLibrary::openWindow(); };
+    addAndMakeVisible (soundsButton);
+
+    updateNowButton.setColour (juce::TextButton::buttonColourId, StudioColours::gold);
+    updateNowButton.setColour (juce::TextButton::textColourOffId, StudioColours::header);
+    updateNowButton.onClick = [this] { startUpdate(); };
+    laterButton.onClick = [this] { setBanner (false); };
+    for (auto* b : { &updateNowButton, &laterButton })
+    {
+        b->setWantsKeyboardFocus (false);
+        addChildComponent (b);
+    }
+
+    // Quiet check a few seconds after start-up.
+    juce::Component::SafePointer<MainComponent> safe (this);
+    juce::Timer::callAfterDelay (5000, [safe] { if (safe != nullptr) safe->checkForUpdates (false); });
+
     // ---- 88-key keyboard ----------------------------------------------------
     keyboard.setAvailableRange (21, 108);
     keyboard.setOctaveForMiddleC (4);
@@ -54,7 +81,87 @@ MainComponent::MainComponent()
 MainComponent::~MainComponent()
 {
     stopTimer();
+    InstrumentPanel::closeAll();
     libraryPage.flush();
+}
+
+//==============================================================================
+//  Updates
+//==============================================================================
+void MainComponent::checkForUpdates (bool userAsked)
+{
+    if (updater.isBusy())
+        return;
+
+    if (userAsked)
+        updatesButton.setButtonText ("Checking...");
+
+    juce::Component::SafePointer<MainComponent> safe (this);
+    updater.check ([safe, userAsked] (Updater::Result result, const Updater::Release& release, const juce::String& message)
+    {
+        if (safe == nullptr)
+            return;
+
+        safe->updatesButton.setButtonText ("Updates");
+
+        if (result == Updater::Result::updateAvailable)
+        {
+            safe->pendingRelease = release;
+            safe->downloadProgress = -1.0f;
+            safe->bannerText = "A new version is ready: " + release.version
+                               + (release.build > 0 ? " (build " + juce::String (release.build) + ")" : juce::String())
+                               + ".  You have " + Updater::describeCurrent() + ".";
+            safe->setBanner (true);
+        }
+        else if (userAsked)
+        {
+            Dialogs::message (safe.getComponent(),
+                              result == Updater::Result::upToDate ? "Up to date" : "Update check", message);
+        }
+    });
+}
+
+void MainComponent::startUpdate()
+{
+    if (pendingRelease.downloadUrl.isEmpty() || updater.isBusy())
+        return;
+
+    libraryPage.flush();
+    downloadProgress = 0.0f;
+    bannerText = "Downloading the update...";
+    updateNowButton.setEnabled (false);
+    laterButton.setEnabled (false);
+    repaint (bannerArea);
+
+    juce::Component::SafePointer<MainComponent> safe (this);
+    updater.downloadAndInstall (pendingRelease,
+        [safe] (float progress)
+        {
+            if (safe == nullptr) return;
+            safe->downloadProgress = progress;
+            safe->bannerText = "Downloading the update...  " + juce::String (juce::roundToInt (progress * 100.0f)) + "%";
+            safe->repaint (safe->bannerArea);
+        },
+        [safe] (bool ok, const juce::String& message)
+        {
+            if (safe == nullptr) return;
+            safe->bannerText = message;
+            safe->downloadProgress = -1.0f;
+            safe->updateNowButton.setEnabled (true);
+            safe->laterButton.setEnabled (true);
+            safe->repaint (safe->bannerArea);
+            if (! ok)
+                Dialogs::message (safe.getComponent(), "Update", message);
+        });
+}
+
+void MainComponent::setBanner (bool visible)
+{
+    bannerVisible = visible;
+    updateNowButton.setVisible (visible);
+    laterButton.setVisible (visible);
+    resized();
+    repaint();
 }
 
 //==============================================================================
@@ -96,11 +203,11 @@ void MainComponent::showAudioSettings()
 {
     // MIDI keyboards are handled by the engine automatically, so only audio is shown here.
     auto* selector = new juce::AudioDeviceSelectorComponent (studio.getAudioDeviceManager(),
-                                                             0, 2,     // inputs
+                                                             0, 8,     // inputs (microphones, guitar)
                                                              2, 2,     // outputs
                                                              false,    // MIDI inputs
                                                              false,    // MIDI output
-                                                             true,     // stereo pairs
+                                                             false,    // inputs listed one by one
                                                              false);   // show advanced
     selector->setSize (600, 420);
 
@@ -200,6 +307,24 @@ void MainComponent::paint (juce::Graphics& g)
                                       : "STAGE 0" + dot + "ENGINE & DEVICES",
                 titleArea, juce::Justification::topLeft);
 
+    if (bannerVisible)
+    {
+        g.setColour (gold.withAlpha (0.16f));
+        g.fillRect (bannerArea);
+        g.setColour (gold);
+        g.fillRect (bannerArea.removeFromBottom (1));
+
+        if (downloadProgress >= 0.0f)
+        {
+            g.setColour (gold.withAlpha (0.35f));
+            g.fillRect (bannerArea.withWidth (juce::roundToInt (bannerArea.getWidth() * downloadProgress)));
+        }
+
+        g.setColour (text);
+        g.setFont (studioFont (14.0f, true));
+        g.drawText (bannerText, bannerArea.reduced (24, 0), juce::Justification::centredLeft, true);
+    }
+
     if (page == Page::engine)
         paintEnginePage (g);
 
@@ -208,7 +333,7 @@ void MainComponent::paint (juce::Graphics& g)
     g.fillRect (footerArea);
     g.setColour (textDim);
     g.setFont (studioFont (12.0f));
-    g.drawText ("Stage 1" + dot + "Step 4 of 22" + dot + "Transport, metronome, tempo and key",
+    g.drawText ("Stage 2" + dot + "Step 9 of 22" + dot + "Audio recording",
                 footerArea.reduced (24, 0), juce::Justification::centredLeft);
     g.drawText ("v" + juce::String (JUCE_APPLICATION_VERSION_STRING),
                 footerArea.reduced (24, 0), juce::Justification::centredRight);
@@ -310,12 +435,25 @@ void MainComponent::resized()
     footerArea = area.removeFromBottom (30);
 
     auto headerInner = headerArea.reduced (24, 20);
-    setupButton.setBounds (headerInner.removeFromRight (200));
-    headerInner.removeFromLeft (340);
+    setupButton.setBounds (headerInner.removeFromRight (180));
+    headerInner.removeFromRight (8);
+    updatesButton.setBounds (headerInner.removeFromRight (100));
+    headerInner.removeFromRight (10);
+    soundsButton.setBounds (headerInner.removeFromRight (140));
+    headerInner.removeFromLeft (320);
     for (auto* tab : { &libraryTab, &studioTab, &engineTab })
     {
-        tab->setBounds (headerInner.removeFromLeft (tab == &engineTab ? 170 : 140));
+        tab->setBounds (headerInner.removeFromLeft (tab == &engineTab ? 160 : 120));
         headerInner.removeFromLeft (8);
+    }
+
+    if (bannerVisible)
+    {
+        bannerArea = area.removeFromTop (44);
+        auto b = bannerArea.reduced (24, 6);
+        laterButton.setBounds (b.removeFromRight (90));
+        b.removeFromRight (8);
+        updateNowButton.setBounds (b.removeFromRight (130));
     }
 
     // Keyboard along the bottom: 52 white keys across the full width.

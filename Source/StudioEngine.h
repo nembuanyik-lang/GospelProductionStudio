@@ -55,6 +55,7 @@ public:
     bool hasOpenSong() const                                 { return openSongId.isNotEmpty(); }
     void applySongSettings (const Song&);                    // tempo, time signature, key
     void save();
+    void autosaveIfChanged();                                // called every few seconds
 
     //==========================================================================
     // Transport
@@ -69,12 +70,31 @@ public:
     void setLooping (bool);
     bool isLooping() const;
     void setLoopBars (int firstBar, int numBars);            // bars counted from 1
+    std::pair<int, int> getLoopBars() const;
 
     struct Position { int bar = 1, beat = 1, beatsInBar = 4; double seconds = 0.0; bool countIn = false; };
     Position getPosition() const;
 
     int  getNumTakes() const;
     void clearTakes();
+    void setPositionSeconds (double seconds);
+
+    //==========================================================================
+    // Tracks (Step 5)
+    te::Edit* getEdit() const                               { return edit.get(); }
+    static bool isInstrumentTrack (te::AudioTrack&);
+    te::AudioTrack* addTrack (bool instrument, const juce::String& name, juce::Colour, te::Track* after,
+                              const juce::String& instrumentId = "grand");
+
+    // Built-in instruments (Step 8)
+    void setInstrument (te::AudioTrack&, const juce::String& instrumentId);
+    static te::Plugin* getInstrumentPlugin (te::AudioTrack&);
+    static juce::String getInstrumentId (te::AudioTrack&);
+    static juce::String describeInstrument (te::AudioTrack&);       // "Grand Piano", "Grand Piano (not downloaded)"
+    void deleteTrack (te::AudioTrack&);
+    void setArmedTrack (te::AudioTrack*);
+    te::AudioTrack* getArmedTrack() const;
+    void ensureSections (const Song&);                      // builds the Sections lane from the lyrics
 
     //==========================================================================
     // Metronome
@@ -87,13 +107,43 @@ public:
     void  setClickSound (int index);
     int   getClickSound() const                             { return clickSound; }
 
+    // Chord audition: plays notes on the armed instrument and lights the keyboard.
+    void audition (const std::vector<int>& notes, bool arpeggio, int durationMs = 1100);
+
+    // Small app-wide settings (chord display, voicing...)
+    static int  getSetting (const juce::String& key, int defaultValue);
+    static void setSetting (const juce::String& key, int value);
+
     static juce::StringArray countInNames()                 { return { "No count-in", "1 bar", "2 bars", "1 beat", "2 beats" }; }
     void  setCountIn (int index);                           // index into countInNames()
     int   getCountIn() const;
 
+    // ---- Audio recording (Step 9) --------------------------------------------
+    std::vector<te::WaveInputDevice*> getAudioInputs() const;          // inputs of the audio interface
+    te::WaveInputDevice* getTrackInput (te::AudioTrack&) const;
+    void setTrackInput (te::AudioTrack&, te::WaveInputDevice*);        // nullptr = no input
+    bool isAudioArmed (te::AudioTrack&) const;
+    void setAudioArmed (te::AudioTrack&, bool);
+    float getTrackInputLevel (te::AudioTrack&);                         // 0..1, for the header meter
+    bool areInputsMono() const;
+    void setInputsMono (bool);
+    te::InputDevice::MonitorMode getMonitorMode (te::AudioTrack&) const;
+    void setMonitorMode (te::AudioTrack&, te::InputDevice::MonitorMode);
+    bool isPunchEnabled() const;
+    void setPunchEnabled (bool);
+    double getRecordStartSeconds() const                     { return recordStartSeconds; }
+    te::Clip* importAudio (te::AudioTrack&, const juce::File&, double startSeconds);
+    static juce::String describeInput (te::WaveInputDevice*);
+
 private:
+    void prepareAudioInputs();
+    te::InputDeviceInstance* findInstance (te::InputDevice&) const;
+    std::map<te::WaveInputDevice*, std::unique_ptr<te::LevelMeasurer::Client>> inputMeters;
+    double recordStartSeconds = 0.0;
     void loadEdit (const juce::File& file);
     void prepareKeysTrack();
+    void createStarterLayout();
+    void addInstrument (te::AudioTrack&, const juce::String& instrumentId = "grand");
     void assignInputs();
     void attachMirrors();
     te::AudioTrack* getKeysTrack() const;
@@ -122,6 +172,7 @@ private:
 
     juce::AudioDeviceManager::LevelMeter::Ptr inputLevel, outputLevel;
     int clickSound = 0;
+    std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StudioEngine)
 };

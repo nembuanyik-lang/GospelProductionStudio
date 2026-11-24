@@ -11,7 +11,7 @@ StudioPage::StudioPage (StudioEngine& e, SongLibrary& lib)
     playButton.onClick   = [this] { engine.togglePlay(); };
     stopButton.onClick   = [this] { engine.stop(); };
     recordButton.onClick = [this] { engine.toggleRecord(); };
-    loopButton.onClick   = [this] { engine.setLooping (! engine.isLooping()); applyLoop(); };
+    loopButton.onClick   = [this] { engine.setLooping (! engine.isLooping()); };
 
     for (auto* b : { &startButton, &playButton, &stopButton, &recordButton, &loopButton })
     {
@@ -83,17 +83,54 @@ StudioPage::StudioPage (StudioEngine& e, SongLibrary& lib)
     loopLength.onValueChange = [this] { applyLoop(); };
     addAndMakeVisible (loopLength);
 
-    // ---- Takes --------------------------------------------------------------
-    clearTakesButton.onClick = [this]
+    // ---- Timeline -----------------------------------------------------------
+    addAndMakeVisible (timeline);
+
+    // ---- Chord Track and palette (Step 6) -----------------------------------
+    timeline.getKey = [this]
     {
-        Dialogs::confirm (this, "Clear takes",
-                          "Remove everything recorded on the Keys track for this song?",
-                          "Clear", "Keep", [this] { engine.clearTakes(); });
+        if (const auto* song = getOpenSong())
+            return Theory::keyFromSong (song->getKeyPitchClass(), song->isMinorKey(), song->key);
+        return Theory::Key();
     };
-    addAndMakeVisible (clearTakesButton);
+    chordPanel = std::make_unique<ChordPanel> (engine, timeline);
+    addAndMakeVisible (*chordPanel);
+    chordPanelOpen = StudioEngine::getSetting ("chordPanelOpen", 1) != 0;
+    chordPanel->setVisible (chordPanelOpen);
+
+    timeline.onTogglePalette = [this]
+    {
+        chordPanelOpen = ! chordPanelOpen;
+        StudioEngine::setSetting ("chordPanelOpen", chordPanelOpen ? 1 : 0);
+        chordPanel->setVisible (chordPanelOpen);
+        resized();
+    };
+    timeline.onChordSelected = [this] (const Theory::Chord* c) { chordPanel->showSuggestionsFor (c); };
+    timeline.onSaveSelection = [this] { chordPanel->saveSelectionAsProgression(); };
+
+    // ---- Piano roll (Step 7) -------------------------------------------------
+    pianoRoll = std::make_unique<PianoRoll> (engine, timeline);
+    addChildComponent (*pianoRoll);
+    pianoRoll->onClose = [this] { closePianoRoll(); };
+    pianoRoll->onSplitChanged = [this] { resized(); repaint(); };
+    timeline.onOpenClip = [this] (te::MidiClip* clip) { openPianoRoll (clip); };
+    timeline.getMemoFile = [this] { return songId.isNotEmpty() ? library.getMemoFile (songId) : juce::File(); };
+
+    // ---- Punch in/out (Step 9) -----------------------------------------------
+    punchButton.setClickingTogglesState (true);
+    punchButton.setWantsKeyboardFocus (false);
+    punchButton.setTooltip ("Punch in/out: when recording, only the loop range (the gold band on the ruler, shown red) is recorded. "
+                            "Start playing a little before it to hear your cue.");
+    punchButton.onClick = [this]
+    {
+        engine.setPunchEnabled (punchButton.getToggleState());
+        timeline.repaint();
+    };
+    punchButton.setColour (juce::TextButton::buttonOnColourId, StudioColours::bad);
+    addAndMakeVisible (punchButton);
 
     for (juce::Button* b : { (juce::Button*) &tapButton, (juce::Button*) &clickButton,
-                             (juce::Button*) &accentToggle, (juce::Button*) &clearTakesButton })
+                             (juce::Button*) &accentToggle })
         b->setWantsKeyboardFocus (false);
 
     setWantsKeyboardFocus (true);
@@ -113,15 +150,57 @@ const Song* StudioPage::getOpenSong() const
     return songId.isNotEmpty() ? library.find (songId) : nullptr;
 }
 
+void StudioPage::openPianoRoll (te::MidiClip* clip)
+{
+    if (clip == nullptr)
+        return;
+
+    // The keyboard plays (and records) on the clip's own track while editing it.
+    if (auto* track = dynamic_cast<te::AudioTrack*> (clip->getTrack()))
+        if (StudioEngine::isInstrumentTrack (*track))
+            engine.setArmedTrack (track);
+
+    pianoRoll->setVisible (true);
+    resized();
+    repaint();
+    pianoRoll->setClip (clip);
+    timeline.refreshAll();
+}
+
+void StudioPage::closePianoRoll()
+{
+    // Called from the piano roll's own button: hide it after the click has finished.
+    juce::Component::SafePointer<StudioPage> safe (this);
+    juce::MessageManager::callAsync ([safe]
+    {
+        if (safe == nullptr || safe->pianoRoll == nullptr)
+            return;
+        safe->pianoRoll->setClip (nullptr);
+        safe->pianoRoll->setVisible (false);
+        safe->timeline.setVisible (true);
+        safe->resized();
+        safe->repaint();
+        safe->timeline.refreshAll();
+    });
+}
+
 void StudioPage::openSong (const juce::String& id)
 {
     const auto* song = library.find (id);
     if (song == nullptr)
         return;
 
+    if (pianoRoll != nullptr && pianoRoll->isOpen())
+    {
+        pianoRoll->setClip (nullptr);
+        pianoRoll->setVisible (false);
+        timeline.setVisible (true);
+    }
+
     songId = id;
     engine.openSong (*song, library.getSongFolder (id).getChildFile ("project.tracktionedit"));
-    applyLoop();
+    engine.ensureSections (*song);
+    timeline.editChanged();
     refreshFromSong();
 }
 
@@ -129,8 +208,15 @@ void StudioPage::songWasDeleted (const juce::String& id)
 {
     if (id == songId)
     {
+        if (pianoRoll != nullptr && pianoRoll->isOpen())
+        {
+            pianoRoll->setClip (nullptr);
+            pianoRoll->setVisible (false);
+            timeline.setVisible (true);
+        }
         engine.closeSong();
         songId = {};
+        timeline.editChanged();
         refreshFromSong();
     }
 }
@@ -168,7 +254,7 @@ void StudioPage::refreshFromSong()
 
     for (juce::Component* c : { (juce::Component*) &tempoSlider, (juce::Component*) &tapButton,
                                 (juce::Component*) &timeSigBox, (juce::Component*) &keyBox,
-                                (juce::Component*) &recordButton, (juce::Component*) &clearTakesButton,
+                                (juce::Component*) &recordButton,
                                 (juce::Component*) &loopStart, (juce::Component*) &loopLength })
         c->setEnabled (enabled);
 
@@ -179,6 +265,11 @@ void StudioPage::refreshFromSong()
         keyBox.setText (song->key, juce::dontSendNotification);
     }
 
+    punchButton.setToggleState (engine.isPunchEnabled(), juce::dontSendNotification);
+
+    if (chordPanel != nullptr)
+        chordPanel->refresh();
+    timeline.repaint();
     refreshMetronomeControls();
     repaint();
 }
@@ -222,7 +313,7 @@ bool StudioPage::handleShortcut (const juce::KeyPress& key)
     if (key == juce::KeyPress::spaceKey)                     { engine.togglePlay(); return true; }
     if (key == juce::KeyPress::homeKey)                      { engine.returnToStart(); return true; }
     if (songId.isNotEmpty() && key.getTextCharacter() == 'r'){ engine.toggleRecord(); return true; }
-    if (key.getTextCharacter() == 'l')                       { engine.setLooping (! engine.isLooping()); applyLoop(); return true; }
+    if (key.getTextCharacter() == 'l')                       { engine.setLooping (! engine.isLooping()); return true; }
     if (key.getTextCharacter() == 'c')                       { engine.setClickEnabled (! engine.isClickEnabled()); return true; }
     return false;
 }
@@ -230,10 +321,24 @@ bool StudioPage::handleShortcut (const juce::KeyPress& key)
 //==============================================================================
 void StudioPage::timerCallback()
 {
+    if (++autosaveTicks >= 300)      // every 10 seconds at 30 Hz
+    {
+        autosaveTicks = 0;
+        engine.autosaveIfChanged();
+    }
+
     const auto pos = engine.getPosition();
     const auto playing = engine.isPlaying();
     const auto recording = engine.isRecording();
     const auto takes = engine.getNumTakes();
+
+    // Keep the loop fields in step with a loop dragged on the ruler.
+    if (! loopStart.isMouseButtonDown() && ! loopLength.isMouseButtonDown())
+    {
+        const auto [first, count] = engine.getLoopBars();
+        loopStart.setValue (first, juce::dontSendNotification);
+        loopLength.setValue (count, juce::dontSendNotification);
+    }
 
     playButton.setLit (playing && ! recording);
     recordButton.setLit (recording);
@@ -250,8 +355,6 @@ void StudioPage::timerCallback()
         lastRecording = recording;
         lastTakes = takes;
         repaint (positionArea);
-        repaint (beatArea);
-        repaint (takesArea);
     }
 }
 
@@ -264,9 +367,9 @@ void StudioPage::paint (juce::Graphics& g)
     // ---- Song header --------------------------------------------------------
     auto headerBox = headerArea;
     g.setColour (text);
-    g.setFont (studioFont (24.0f, true));
+    g.setFont (studioFont (21.0f, true));
     g.drawText (song != nullptr ? song->title : juce::String ("No song open"),
-                headerBox.removeFromTop (34), juce::Justification::bottomLeft, true);
+                headerBox.removeFromTop (26), juce::Justification::bottomLeft, true);
 
     g.setColour (song != nullptr ? gold : textDim);
     g.setFont (studioFont (13.5f));
@@ -281,6 +384,8 @@ void StudioPage::paint (juce::Graphics& g)
     // ---- Cards --------------------------------------------------------------
     for (auto cardArea : { transportCard, metronomeCard })
     {
+        if (cardArea.isEmpty())
+            continue;
         g.setColour (card);
         g.fillRoundedRectangle (cardArea.toFloat(), 10.0f);
         g.setColour (cardBorder);
@@ -298,153 +403,156 @@ void StudioPage::paint (juce::Graphics& g)
         g.drawText ("Tempo (dotted quarter)", tempoLabelArea, juce::Justification::bottomLeft);
     }
 
-    // ---- Position display ---------------------------------------------------
+    // ---- Position display with beat lights ---------------------------------
     {
         auto area = positionArea;
         g.setColour (header);
         g.fillRoundedRectangle (area.toFloat(), 8.0f);
 
-        auto inner = area.reduced (14, 6);
+        auto inner = area.reduced (12, 6);
         const auto& p = lastPosition;
         const auto countIn = p.countIn && lastRecording;
 
-        g.setFont (studioFont (30.0f, true));
-        g.setColour (countIn ? bad : (lastPlaying ? gold : text));
+        auto top = inner.removeFromTop (30);
+        g.setFont (studioFont (26.0f, true));
+        g.setColour (countIn ? bad : (lastRecording ? bad : (lastPlaying ? gold : text)));
         g.drawText (countIn ? juce::String ("COUNT-IN")
                             : juce::String (juce::jmax (1, p.bar)) + "." + juce::String (juce::jmax (1, p.beat)),
-                    inner.removeFromTop (38), juce::Justification::centredLeft);
+                    top, juce::Justification::centredLeft);
 
         const auto secs = juce::jmax (0.0, p.seconds);
         const auto mins = (int) (secs / 60.0);
-        g.setFont (studioFont (13.0f));
+        g.setFont (studioFont (12.5f));
         g.setColour (textDim);
-        g.drawText ("Bar.Beat     " + juce::String (mins) + ":" + juce::String (secs - mins * 60.0, 1).paddedLeft ('0', 4),
-                    inner, juce::Justification::centredLeft);
-    }
+        g.drawText (juce::String (mins) + ":" + juce::String (secs - mins * 60.0, 1).paddedLeft ('0', 4),
+                    top, juce::Justification::centredRight);
 
-    // ---- Beat indicator -----------------------------------------------------
-    {
-        auto area = beatArea;
-        const auto& p = lastPosition;
+        // Beat lights: beat 1 gold, main pulses of 6/8 and 12/8 larger.
         const auto beats = juce::jlimit (1, 16, p.beatsInBar);
         const auto activeBeat = (lastPlaying || lastRecording) ? p.beat : 0;
-
-        g.setFont (studioFont (15.0f, true));
-        g.setColour (lastRecording ? bad : (lastPlaying ? good : textDim));
-        g.drawText (lastRecording ? (p.countIn ? "COUNT-IN" : "RECORDING")
-                                  : (lastPlaying ? "PLAYING" : "STOPPED"),
-                    area.removeFromTop (30), juce::Justification::centred);
-
-        const auto size = juce::jmin (54, (area.getWidth() - 40) / beats - 12);
-        const auto totalW = beats * (size + 12) - 12;
-        auto row = juce::Rectangle<int> (totalW, size).withCentre ({ area.getCentreX(), area.getY() + size / 2 + 16 });
+        const auto compound = song != nullptr && song->isCompoundMeter();
+        const auto step = juce::jmin (18.0f, (float) inner.getWidth() / (float) beats);
+        auto x = (float) inner.getX();
+        const auto cy = (float) inner.getCentreY() + 2.0f;
 
         for (int i = 1; i <= beats; ++i)
         {
-            auto dotArea = row.removeFromLeft (size).toFloat();
-            row.removeFromLeft (12);
+            const auto main = i == 1 || (compound && (i - 1) % 3 == 0);
+            const auto d = main ? 11.0f : 8.0f;
+            const auto r = juce::Rectangle<float> (d, d).withCentre ({ x + step * 0.5f, cy });
+            const auto on = i == activeBeat;
 
-            // In 6/8, 9/8 and 12/8 the main pulses (beats 1, 4, 7, 10) are drawn larger.
-            const auto compound = song != nullptr && song->isCompoundMeter();
-            const auto isFirst = i == 1 || (compound && (i - 1) % 3 == 0);
-            const auto isOn = i == activeBeat;
-            const auto colour = i == 1 ? gold : text;
-
-            g.setColour (isOn ? colour : card.brighter (0.05f));
-            g.fillEllipse (dotArea.reduced (isFirst ? 0.0f : 5.0f));
-            g.setColour (isOn ? colour : cardBorder.brighter (0.2f));
-            g.drawEllipse (dotArea.reduced (isFirst ? 0.5f : 5.5f), 1.5f);
-
-            g.setColour (isOn ? header : textDim);
-            g.setFont (studioFont (13.0f, true));
-            g.drawText (juce::String (i), dotArea.toNearestInt(), juce::Justification::centred);
+            g.setColour (on ? (i == 1 ? gold : text) : cardBorder.brighter (0.2f));
+            g.fillEllipse (r);
+            x += step;
         }
-    }
-
-    // ---- Takes ---------------------------------------------------------------
-    {
-        g.setFont (studioFont (13.5f));
-        g.setColour (textDim);
-        const auto takes = lastTakes < 0 ? 0 : lastTakes;
-        const auto message = song == nullptr
-            ? juce::String ("Open a song to record takes.")
-            : (takes == 0 ? juce::String ("Keys track: no takes yet. Press Record (R) and play your keyboard.")
-                          : "Keys track: " + juce::String (takes) + (takes == 1 ? " take" : " takes")
-                                + " recorded. Press Play to hear them. The timeline to see and edit takes arrives in Step 5.");
-        g.drawFittedText (message, takesArea, juce::Justification::centredLeft, 2);
     }
 }
 
 void StudioPage::resized()
 {
     labels.clear();
-    auto area = getLocalBounds().reduced (24, 14);
+    auto area = getLocalBounds().reduced (20, 10);
 
-    headerArea = area.removeFromTop (56);
-    area.removeFromTop (10);
+    // While the piano roll is open the song title and the metronome card fold away to give the notes room.
+    const auto compact = pianoRoll != nullptr && pianoRoll->isVisible();
 
-    // ---- Transport card -----------------------------------------------------
-    transportCard = area.removeFromTop (100);
-    auto t = transportCard.reduced (16, 12);
-
-    auto buttons = t.removeFromLeft (5 * 58 + 4 * 8);
-    buttons = buttons.withSizeKeepingCentre (buttons.getWidth(), 58);
-    for (auto* b : { &startButton, &playButton, &stopButton, &recordButton, &loopButton })
-    {
-        b->setBounds (buttons.removeFromLeft (58));
-        buttons.removeFromLeft (8);
-    }
-
-    t.removeFromLeft (18);
-    positionArea = t.removeFromLeft (230);
-    t.removeFromLeft (18);
+    headerArea = compact ? juce::Rectangle<int>() : area.removeFromTop (44);
+    if (! compact)
+        area.removeFromTop (6);
 
     auto field = [this] (juce::Rectangle<int>& row, int width, const juce::String& label)
     {
         auto col = row.removeFromLeft (width);
         row.removeFromLeft (12);
-        auto labelArea = col.removeFromTop (22);
+        auto labelArea = col.removeFromTop (18);
         labels.push_back ({ labelArea, label });
-        return col.withSizeKeepingCentre (col.getWidth(), 36);
+        return col.withSizeKeepingCentre (col.getWidth(), 32);
     };
 
+    // ---- Transport card -----------------------------------------------------
+    transportCard = area.removeFromTop (72);
+    auto t = transportCard.reduced (12, 8);
+
+    auto buttons = t.removeFromLeft (5 * 50 + 4 * 6);
+    buttons = buttons.withSizeKeepingCentre (buttons.getWidth(), 50);
+    for (auto* b : { &startButton, &playButton, &stopButton, &recordButton, &loopButton })
     {
-        auto col = t.removeFromLeft (250);
+        b->setBounds (buttons.removeFromLeft (50));
+        buttons.removeFromLeft (6);
+    }
+    t.removeFromLeft (8);
+    punchButton.setBounds (t.removeFromLeft (62).withSizeKeepingCentre (62, 30));
+
+    t.removeFromLeft (14);
+    positionArea = t.removeFromLeft (210);
+    t.removeFromLeft (14);
+
+    {
+        auto col = t.removeFromLeft (230);
         t.removeFromLeft (12);
-        tempoLabelArea = col.removeFromTop (22);
+        tempoLabelArea = col.removeFromTop (18);
         labels.push_back ({ tempoLabelArea, "Tempo" });
-        auto r = col.withSizeKeepingCentre (col.getWidth(), 36);
-        tapButton.setBounds (r.removeFromRight (60));
-        r.removeFromRight (8);
+        auto r = col.withSizeKeepingCentre (col.getWidth(), 32);
+        tapButton.setBounds (r.removeFromRight (54));
+        r.removeFromRight (6);
         tempoSlider.setBounds (r);
     }
-    timeSigBox.setBounds (field (t, 100, "Time signature"));
-    keyBox.setBounds (field (t, juce::jmin (150, juce::jmax (110, t.getWidth())), "Key"));
+    timeSigBox.setBounds (field (t, 92, "Time signature"));
+    keyBox.setBounds (field (t, juce::jlimit (100, 140, t.getWidth()), "Key"));
 
-    area.removeFromTop (12);
+    area.removeFromTop (6);
 
-    // ---- Metronome card -----------------------------------------------------
-    metronomeCard = area.removeFromTop (88);
-    auto m = metronomeCard.reduced (16, 10);
+    // ---- Metronome and loop card --------------------------------------------
+    for (juce::Component* c : { (juce::Component*) &clickButton, (juce::Component*) &clickSoundBox,
+                                (juce::Component*) &clickVolume, (juce::Component*) &accentToggle,
+                                (juce::Component*) &countInBox, (juce::Component*) &loopStart, (juce::Component*) &loopLength })
+        c->setVisible (! compact);
 
+    if (compact)
     {
-        auto col = m.removeFromLeft (58);
-        m.removeFromLeft (14);
-        labels.push_back ({ col.removeFromTop (22), "Click" });
-        clickButton.setBounds (col.withSizeKeepingCentre (58, 40));
+        metronomeCard = {};
     }
-    clickSoundBox.setBounds (field (m, 130, "Click sound"));
-    clickVolume.setBounds (field (m, 150, "Click volume"));
-    accentToggle.setBounds (field (m, 140, " "));
-    countInBox.setBounds (field (m, 130, "Count-in (recording)"));
-    loopStart.setBounds (field (m, 130, "Loop from bar"));
-    loopLength.setBounds (field (m, 150, "Loop length"));
+    else
+    {
+        metronomeCard = area.removeFromTop (60);
+        auto m = metronomeCard.reduced (12, 6);
 
-    area.removeFromTop (12);
+        {
+            auto col = m.removeFromLeft (50);
+            m.removeFromLeft (12);
+            labels.push_back ({ col.removeFromTop (18), "Click" });
+            clickButton.setBounds (col.withSizeKeepingCentre (50, 30));
+        }
+        clickSoundBox.setBounds (field (m, 120, "Click sound"));
+        clickVolume.setBounds (field (m, 130, "Click volume"));
+        accentToggle.setBounds (field (m, 130, " "));
+        countInBox.setBounds (field (m, 130, "Count-in (recording)"));
+        loopStart.setBounds (field (m, 120, "Loop from bar"));
+        loopLength.setBounds (field (m, 140, "Loop length"));
+    }
 
-    // ---- Beat indicator and takes -------------------------------------------
-    takesArea = area.removeFromBottom (44);
-    clearTakesButton.setBounds (takesArea.removeFromRight (130).withSizeKeepingCentre (130, 34));
-    takesArea.removeFromRight (12);
-    beatArea = area;
+    area.removeFromTop (8);
+    if (chordPanelOpen && chordPanel != nullptr)
+    {
+        chordPanel->setBounds (area.removeFromRight (juce::jlimit (340, 400, area.getWidth() / 3)));
+        area.removeFromRight (8);
+    }
+
+    if (pianoRoll != nullptr && pianoRoll->isVisible())
+    {
+        // Split: timeline on top, piano roll below. On small screens the piano roll takes the whole area.
+        const auto split = pianoRoll->isSplit() && area.getHeight() >= 540;
+        timeline.setVisible (split);
+        if (split)
+        {
+            timeline.setBounds (area.removeFromTop (juce::jmax (180, area.getHeight() * 34 / 100)));
+            area.removeFromTop (6);
+        }
+        pianoRoll->setBounds (area);
+        return;
+    }
+
+    timeline.setVisible (true);
+    timeline.setBounds (area);
 }

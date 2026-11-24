@@ -1,6 +1,6 @@
 # Gospel Production Studio
 
-**Current build: Stage 1, Step 4 (Transport, metronome, tempo and key)**, version 0.3.0. Runs on Tracktion Engine.
+**Current build: Stage 1, Step 5 (Tracks and timeline) with automatic updates**, version 0.4.0. Runs on Tracktion Engine.
 
 Stage 0 set up the GitHub build and produced the first version of the studio: the **Studio Shell**. It opens with the professional interface, connects to your audio device, plays a test tone, and detects your keyboard (YPT-240), which you can then play.
 
@@ -31,6 +31,141 @@ For each new step, upload the changed files Claude sends and run the workflow ag
 ### Optional: build on the laptop
 
 `setup.bat` and `build.bat` build the studio locally. This needs Visual Studio Community with **Desktop development with C++** and **C++ CMake tools**, plus Git for Windows. It is only needed for fast testing later; GitHub is the normal route.
+
+---
+
+## Automatic updates
+
+From version 0.4.0 the app updates itself from your GitHub Releases:
+
+- A few seconds after it opens, the app quietly checks GitHub. If a newer build exists, a gold bar appears: **Update Now** downloads the new Setup, installs it and reopens the app.
+- The **Updates** button (top right) checks at any time and tells you if you are up to date.
+- Each GitHub run has its own build number, so even a fix-only rebuild is offered as an update.
+
+**Important:** the app can only see releases of a **public** repository. If yours is private, make it public: GitHub > your repository > **Settings** > **General** > scroll to **Danger Zone** > **Change visibility** > **Public**.
+
+---
+
+## Stage 2, Step 9 test: Audio recording
+
+Before testing: plug in the audio interface, open **Audio & MIDI Setup**, choose it, and tick its input channels.
+Use headphones while recording so the speakers do not leak into the microphone.
+
+| # | Test | Pass when |
+|---|------|-----------|
+| 1 | Choose an input | Right-click Lead Vocal > Input: your interface's inputs are listed; choose the microphone input. The track shows "In: ..." |
+| 2 | Mono or stereo | Input > "Inputs as single channels" for a microphone or guitar; "stereo pairs" for a stereo keyboard |
+| 3 | Arm and meter | Press R on Lead Vocal: it turns red and a level meter moves when you sing. Green is good, orange is loud, red is too loud: turn the interface gain down |
+| 4 | Hear yourself | Monitoring > Auto: you hear your voice while armed. If you hear a delay, choose Off and use the interface's direct monitoring knob |
+| 5 | Record | Press Record (R): after the count-in, a red band grows on the armed track; Stop: the recording appears as a clip with its waveform |
+| 6 | Voice and keys together | Arm Lead Vocal (R) and also Keys (R): one recording captures both |
+| 7 | Files are safe | The recordings are WAV files in the song's own folder (Documents\Gospel Production Studio\Songs\...) |
+| 8 | Takes | Turn on Loop, arm a track and record through the loop 3 times: one clip says "Take 3/3". Right-click it > Takes: pick the best take and hear it |
+| 9 | Keep a take | Right-click > "Keep this take, delete the others..." keeps the one you hear |
+| 10 | Punch in/out | Set the loop range over the bar to fix, turn **Punch** on (the range turns red), start a bar or two before it and record: only the red range is replaced |
+| 11 | Voice memo | Right-click an audio track > "Place the song's voice memo at the playhead": the memo you sang in the Song Library becomes a clip |
+| 12 | Import | Right-click an audio track > "Import audio file at the playhead...": WAV, MP3, FLAC or OGG becomes a clip (a copy is kept with the song) |
+| 13 | Undo | Ctrl+Z removes a recording or an import |
+
+---
+
+## Stage 1, Step 8 test: Instruments and grooves
+
+**One-time setup on GitHub (no data from your phone):** create the workflow file
+`.github/workflows/build-sound-packs.yml` (copy it from `build-sound-packs-workflow.txt`),
+upload the `tools` folder, then in Actions run **Build sound packs** once. It makes the
+release "sounds-v1" with the packs. The repository must be public for the app to download them.
+
+| # | Test | Pass when |
+|---|------|-----------|
+| 1 | Sound Library | The **Sound Library** button (top right) lists Grand Piano, Grand Piano (full detail), Electric Bass, Drum Kit and Upright Piano, each with its size |
+| 2 | Download once | **Download** shows progress, then INSTALLED. Close and reopen the app: still installed, nothing downloads again. **Remove** frees the space |
+| 3 | New song layout | A new song opens with Keys (Grand Piano), Organ (Gospel Organ), Bass (Electric Bass), Drums (Drum Kit), Lead Vocal and Choir |
+| 4 | Grand Piano | Soft and hard playing sound different (velocity layers); the sustain pedal holds notes; letting go gives the gentle damper sound |
+| 5 | Instrument settings | Click the instrument name under a track name (or right-click the track > Instrument settings) |
+| 6 | Organ drawbars | Drag the drawbars down and up while holding a chord: the sound changes at once. Double-click a drawbar for 0/8 |
+| 7 | Organ presets | Gospel Full, Gospel Classic, Praise Break (Shout), Sweet Ballad, Soft Worship Pad, Comping Stabs, Soul Classic, Flute Lead, Bright Choir Lift |
+| 8 | Leslie | Slow / Fast buttons, or the **mod wheel** on your keyboard: the horn speeds up in about a second, the drum takes a few seconds (the light shows Slow/Fast) |
+| 9 | Percussion | Turn on Percussion: the first note of a phrase "pings"; notes played legato do not re-trigger it |
+| 10 | Piano / bass / drums settings | Volume, Tone, Release and Touch change the sound |
+| 11 | Change instrument | Right-click a track > Change instrument. **+ Track** offers every instrument. Older songs keep Studio Keys until you change it |
+| 12 | Not downloaded yet | A track whose pack is not installed says "(not downloaded)" in orange and plays the simple Studio Keys sound |
+| 13 | Grooves | Right-click the Drums lane > Insert groove: the groove fills from that bar to the end of the section. 6/8 and 12/8 grooves appear in 6/8 and 12/8 songs |
+| 14 | Drum mapping | With a groove playing, the kick, snare, hi-hat and toms sound in the right places |
+| 15 | Saved | Instrument choice and all settings come back when the song is reopened |
+
+---
+
+## Stage 1, Step 7 test: Piano roll
+
+| # | Test | Pass when |
+|---|------|-----------|
+| 1 | Open | Double-click a clip (or right-click > Open in piano roll, or select it and press Enter). A new empty clip opens straight away |
+| 2 | Room for notes | While the piano roll is open the metronome card folds away. **Split** shows the timeline above (on big screens); **Close** or Esc returns |
+| 3 | Plays the right sound | Opening a clip arms its track: clicking the keys on the left, or a note, plays that track's sound |
+| 4 | Chords behind the notes | The chord strip is under the bar numbers; the gold rows are the tones of each chord, the brighter row is its root |
+| 5 | Check notes | White dot = chord tone. Red = clashes (outside the chord and the key). Notes pushed a little early are judged by the chord they sound over |
+| 6 | Fit to chords | Moves red notes onto the nearest chord tone (selected notes, or all) |
+| 7 | Draw | Press B (Draw): click to add a note, drag to set its length. V goes back to Select, where double-click adds a note |
+| 8 | Edit notes | Drag to move (snaps to the grid, any pitch), drag an edge to resize, Alt-drag copies, right-click deletes, drag on empty space box-selects, Shift adds |
+| 9 | Grid and length | Grid 1/4 to 1/32, triplets, bar or off; new notes use the last length (or the length chosen) |
+| 10 | Velocity | Drag the bars in the lane at the bottom; starting on a selected note changes all selected notes together |
+| 11 | Edit menu | Quantise (100%, 75%, 50%, with ends), Transpose, Velocity, Legato, Humanise, Select clashing notes, Copy, Paste, Duplicate |
+| 12 | Keys | Up / Down transpose (Shift = octave), Left / Right move by the grid, Q quantise, Ctrl+A / C / V / D, Delete, Ctrl+Z / Ctrl+Y. Space still plays |
+| 13 | Clip grows | Drawing past the end of the clip extends it to the next bar line |
+| 14 | Zoom and scroll | Ctrl + wheel zooms across, Alt + wheel zooms the note height, the wheel scrolls notes, Shift + wheel scrolls across; **Fit** shows the whole clip |
+| 15 | Playback | While playing, the gold playhead moves and the view follows it |
+| 16 | Timeline follows | Changes appear at once in the clip on the timeline, and are saved with the song |
+
+---
+
+## Stage 1, Step 6 test: Chord Track and gospel palette
+
+| # | Test | Pass when |
+|---|------|-----------|
+| 1 | Chords lane | Under Sections there is a **Chords** lane; the **Palette** button on it shows or hides the chord palette on the right |
+| 2 | Key follows the song | The palette title shows the song's key; change the key at the top and every chord name changes with it (numbers stay the same) |
+| 3 | Display choice | The box at the top of the palette switches between **Numbers and names**, **Numbers only** and **Names only**, on the palette and on the timeline |
+| 4 | Hear a chord | One click on a chip plays the chord on the Keys sound; Shift-click plays it as an arpeggio |
+| 5 | Add at the playhead | Double-click a chip: the chord is placed at the playhead (length from **Length**) and the playhead moves on, ready for the next one |
+| 6 | Next suggestions | The gold **Next** row shows strong moves after the chord you clicked, added, or the one under the playhead |
+| 7 | Palette groups | In the key, Sevenths, Gospel favourites, Passing diminished, Secondary dominants, Tritone substitutions, Borrowed and backdoor, Tension and endings |
+| 8 | Build any chord | The row under the palette (degree, chord type, slash bass) with **Hear** and **Add** makes any chord |
+| 9 | Progressions | The Progressions tab has 12 categories (including **African and Cameroonian**: makossa, assiko, highlife, bikutsi, bend-skin, seben, soukous). Choose Simple, Rich or Advanced gospel, **Hear** it, then **Insert at playhead** (it starts on the next bar line) |
+| 10 | Edit on the timeline | Drag a chord to move it, drag its edges to change its length; double-click a chord to hear it as an arpeggio |
+| 11 | Chord menu | Right-click a chord: Hear, Change chord type (7 groups), Slash bass, Reharmonise, Save, Delete |
+| 12 | Reharmonise | Click the first chord, Shift-click the last, right-click: **Advanced gospel** adds approach chords (for example 3(7b9) before 6m, #4°7 before 5) |
+| 13 | My Progressions | Save selected chords with a name; they appear in My Progressions in any key, and stay after the app is closed |
+| 14 | Voicings | RH (Close, Spread, Gospel rootless, Shell, Fourths, Upper structure, Cluster) and LH (Root, Root + 5th, Octave) change how chords sound |
+| 15 | Chords to notes | **Chords to notes...** writes the chords as real notes on Keys and Bass; press Play to hear the band follow the chords. Run it again after changes: it replaces, never doubles |
+| 16 | Delete and undo | Select a chord and press Delete; Ctrl+Z brings it back |
+| 17 | Saved with the song | Close and reopen the app: the chords are still on the song |
+
+Detecting chords automatically from a recording stays in **Step 22**, as planned.
+
+---
+
+## Stage 1, Step 5 test: Tracks and timeline
+
+| # | Test | Pass when |
+|---|------|-----------|
+| 1 | Starter tracks | A **new** song opened in the Studio has Keys, Bass, Drums, Lead Vocal and Choir |
+| 2 | Sections | The Sections lane shows the song's lyrics sections (Intro, Verse 1, Chorus 1...) as coloured blocks |
+| 3 | Ruler | Clicking the ruler moves the gold playhead; while playing, the timeline follows it |
+| 4 | Loop by dragging | Dragging along the lower half of the ruler sets the loop; its edges can be dragged; the loop fields update |
+| 5 | Record a take | Record (R) on the armed track (red R): after stopping, the take appears as a clip with your notes drawn inside |
+| 6 | Arm another track | Clicking R on another instrument track makes the keyboard play and record there |
+| 7 | Move clips | Drag a clip along the track and onto another track; it snaps to the beat (or bar / half beat / off) |
+| 8 | Trim clips | Drag a clip's left or right edge to shorten or lengthen it |
+| 9 | Clip menu | Right-click a clip: Rename, Duplicate, Copy, Delete |
+| 10 | Shortcuts | Ctrl+D duplicate, Ctrl+C / Ctrl+V copy and paste at the playhead, Delete removes, Ctrl+Z / Ctrl+Y undo and redo |
+| 11 | Empty clip | Double-click an instrument lane to add a one-bar clip (it is filled in the piano roll, Step 7) |
+| 12 | Tracks | + Track adds instrument or audio tracks; right-click a track name for Rename, Colour, Move up/down, Delete |
+| 13 | Mute / Solo / Volume | M and S work while playing; the volume slider changes the level (double-click for 0 dB) |
+| 14 | Zoom and scroll | Ctrl + mouse wheel zooms, Shift + wheel scrolls sideways, **Fit** shows the whole song |
+| 15 | Sections editing | Sections can be moved, resized, renamed, recoloured; + Section adds a new one |
+| 16 | Autosave | Changes are saved every 10 seconds and when the app closes |
+| 17 | Updates | **Updates** button answers (up to date, or offers the new version) |
 
 ---
 
@@ -131,10 +266,26 @@ GospelProductionStudio\
     ClickSounds.*          metronome sounds (click, woodblock, rim, cowbell)
     StudioPage.*           Studio page: transport, tempo, key, metronome, loop
     TransportButton.h      drawn transport buttons
+    Timeline.*             tracks, ruler, clips, sections, chords lane, loop, zoom, undo
+    Theory.*               gospel harmony: chord types, numbers and names, voicings, palette, progression library
+    ChordTrack.*           chords stored in the song, and Chords to notes
+    ChordPanel.*           chord palette, progressions and My Progressions
+    PianoRoll.*            piano roll: notes, velocity, quantise, chord check
+    Sfz.*                  SFZ instruments: reading, sample loading, shared cache
+    SamplerPlugin.*        Gospel Sampler: piano, bass and drum packs
+    OrganPlugin.*          Gospel Organ: drawbars, percussion, vibrato, Leslie
+    Instruments.*          the instrument list and where sound packs live
+    SoundLibrary.*         Sound Library window: download packs once
+    InstrumentPanel.*      instrument settings window (drawbars etc.)
+    Grooves.*              starter drum grooves
+    Takes.*                choosing takes on recorded clips
+    RenderTest.*           developer check: renders each instrument to WAV
+  tools\make_sound_packs.py builds the sound packs (run by the GitHub workflow)
+    Updater.*              automatic updates from GitHub Releases
     Dialogs.h              confirmation boxes
     StudioLookAndFeel.h    colours, fonts and the professional theme
     LevelMeter.h           input and output meters
-    StudioKeys.h           Stage 0 test instrument (replaced in Step 8)
+    StudioKeys.h           simple built-in sound (used until a pack is downloaded)
   libs\                    downloaded engine (created by setup.bat)
   build\                   compiled output (created by build.bat)
 ```
@@ -143,4 +294,4 @@ GospelProductionStudio\
 
 ## What comes next
 
-**Stage 1, Step 5: Tracks and timeline.** A real arrangement view: tracks you can add and name, a bar ruler, the playhead, and your recorded takes shown as clips.
+**Stage 2, Step 10: Comping and audio editing.** Build the best performance from several takes (comping), split, trim, fade and crossfade audio, clip gain, time-stretch and pitch-shift.

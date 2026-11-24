@@ -1,6 +1,7 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "MainComponent.h"
 #include "StudioLookAndFeel.h"
+#include "RenderTest.h"
 
 //==============================================================================
 class GospelProductionStudioApplication final : public juce::JUCEApplication
@@ -10,8 +11,14 @@ public:
     const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
     bool moreThanOneInstanceAllowed() override          { return false; }
 
-    void initialise (const juce::String&) override
+    void initialise (const juce::String& commandLine) override
     {
+        if (RenderTest::runIfRequested (commandLine))
+        {
+            quit();
+            return;
+        }
+
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
         mainWindow = std::make_unique<MainWindow> (getApplicationName());
     }
@@ -35,8 +42,8 @@ public:
             setUsingNativeTitleBar (true);
             setContentOwned (new MainComponent(), true);
             setResizable (true, true);
-            setResizeLimits (1100, 680, 10000, 10000);
-            centreWithSize (1280, 800);
+            setResizeLimits (1200, 720, 10000, 10000);
+            centreWithSize (1366, 860);
             setVisible (true);
         }
 

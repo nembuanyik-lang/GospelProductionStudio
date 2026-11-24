@@ -1,10 +1,10 @@
 # =============================================================================
 #  Gospel Production Studio
-#  Stage 1 / Step 4 - Transport, metronome, tempo and key
+#  Stage 1 / Step 5 - Tracks and timeline, automatic updates
 # =============================================================================
 cmake_minimum_required(VERSION 3.22)
 
-project(GospelProductionStudio VERSION 0.3.0 LANGUAGES C CXX)
+project(GospelProductionStudio VERSION 0.8.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -59,7 +59,22 @@ target_sources(GospelProductionStudio PRIVATE
     Source/SongEditor.cpp
     Source/ClickSounds.cpp
     Source/StudioEngine.cpp
-    Source/StudioPage.cpp)
+    Source/StudioPage.cpp
+    Source/Timeline.cpp
+    Source/Updater.cpp
+    Source/Theory.cpp
+    Source/ChordTrack.cpp
+    Source/ChordPanel.cpp
+    Source/PianoRoll.cpp
+    Source/Sfz.cpp
+    Source/Instruments.cpp
+    Source/SamplerPlugin.cpp
+    Source/OrganPlugin.cpp
+    Source/Grooves.cpp
+    Source/RenderTest.cpp
+    Source/SoundLibrary.cpp
+    Source/InstrumentPanel.cpp
+    Source/Takes.cpp)
 
 target_include_directories(GospelProductionStudio PRIVATE Source)
 
@@ -87,6 +102,13 @@ if(GPS_ENABLE_ASIO)
         "${CMAKE_CURRENT_SOURCE_DIR}/libs/asiosdk/common")
 endif()
 
+# Automatic updates: the GitHub build passes its run number and repository.
+set(GPS_BUILD_NUMBER "0" CACHE STRING "Build number (set by the GitHub workflow)")
+set(GPS_UPDATE_REPO "nembuanyik-lang/GospelProductionStudio" CACHE STRING "GitHub owner/repo for updates")
+target_compile_definitions(GospelProductionStudio PRIVATE
+    GPS_BUILD_NUMBER=${GPS_BUILD_NUMBER}
+    GPS_UPDATE_REPO="${GPS_UPDATE_REPO}")
+
 # Linux is only used for Claude's pre-checks before each GitHub build.
 target_compile_definitions(GospelProductionStudio PRIVATE
     $<$<PLATFORM_ID:Linux>:JUCE_ALSA=0>
@@ -113,6 +135,7 @@ target_link_libraries(GospelProductionStudio
         juce::juce_audio_utils
         juce::juce_audio_devices
         juce::juce_dsp
+        juce::juce_cryptography
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags

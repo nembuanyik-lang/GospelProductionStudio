@@ -3,6 +3,9 @@
 #include "StudioEngine.h"
 #include "SongLibrary.h"
 #include "TransportButton.h"
+#include "Timeline.h"
+#include "ChordPanel.h"
+#include "PianoRoll.h"
 
 //==============================================================================
 //  Studio page (Stage 1, Step 4): the open song's transport, tempo,
@@ -44,6 +47,7 @@ private:
     TransportButton stopButton   { "Stop (press twice to return to start)", TransportButton::Icon::stop, StudioColours::gold };
     TransportButton recordButton { "Record (R)",             TransportButton::Icon::record,  StudioColours::bad };
     TransportButton loopButton   { "Loop (L)",               TransportButton::Icon::loop,    StudioColours::gold };
+    juce::TextButton punchButton { "Punch" };
 
     // Song musical settings
     juce::Slider     tempoSlider { juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft };
@@ -60,7 +64,12 @@ private:
     juce::Slider loopStart  { juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft };
     juce::Slider loopLength { juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft };
 
-    juce::TextButton clearTakesButton { "Clear Takes" };
+    TimelineView timeline { engine };
+    std::unique_ptr<ChordPanel> chordPanel;
+    std::unique_ptr<PianoRoll> pianoRoll;
+    void openPianoRoll (te::MidiClip*);
+    void closePianoRoll();
+    bool chordPanelOpen = true;
 
     // State
     juce::String songId;
@@ -68,9 +77,10 @@ private:
     StudioEngine::Position lastPosition;
     bool lastPlaying = false, lastRecording = false;
     int lastTakes = -1;
+    int autosaveTicks = 0;
 
     // Layout areas used in paint()
-    juce::Rectangle<int> headerArea, transportCard, metronomeCard, beatArea, positionArea, takesArea;
+    juce::Rectangle<int> headerArea, transportCard, metronomeCard, positionArea;
     std::vector<std::pair<juce::Rectangle<int>, juce::String>> labels;
     juce::Rectangle<int> tempoLabelArea;
 

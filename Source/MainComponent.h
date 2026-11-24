@@ -7,6 +7,8 @@
 #include "SongLibrary.h"
 #include "LibraryPage.h"
 #include "StudioPage.h"
+#include "Updater.h"
+#include "SoundLibrary.h"
 
 //==============================================================================
 //  Main window content.
@@ -34,12 +36,17 @@ private:
     void allNotesOff();
     void paintEnginePage (juce::Graphics&);
 
+    void checkForUpdates (bool userAsked);
+    void startUpdate();
+    void setBanner (bool visible);
+
     void drawCard (juce::Graphics&, juce::Rectangle<int> area, const juce::String& title) const;
     void drawRow (juce::Graphics&, juce::Rectangle<int>& area, const juce::String& label,
                   const juce::String& value, juce::Colour valueColour) const;
 
     //==========================================================================
     // Order matters: the engine is created first and destroyed last.
+    SoundLibrary soundLibrary;      // before the engine: instruments ask it for packs
     StudioEngine studio;
     SongLibrary  songLibrary;
     LibraryPage  libraryPage { songLibrary, studio.getMemo() };
@@ -52,6 +59,17 @@ private:
     juce::TextButton studioTab   { "Studio" };
     juce::TextButton engineTab   { "Engine & Devices" };
     juce::TextButton setupButton { "Audio & MIDI Setup" };
+    juce::TextButton updatesButton { "Updates" };
+    juce::TextButton soundsButton { "Sound Library" };
+
+    // Updates
+    Updater updater;
+    Updater::Release pendingRelease;
+    bool bannerVisible = false;
+    juce::String bannerText;
+    float downloadProgress = -1.0f;
+    juce::TextButton updateNowButton { "Update Now" }, laterButton { "Later" };
+    juce::Rectangle<int> bannerArea;
 
     // Engine & Devices page
     juce::TextButton toneButton  { "Test Tone  (A 440 Hz)" };

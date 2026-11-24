@@ -39,3 +39,5 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; After an automatic (silent) update, open the new version straight away.
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: WizardSilent
