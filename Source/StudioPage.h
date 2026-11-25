@@ -6,6 +6,8 @@
 #include "Timeline.h"
 #include "ChordPanel.h"
 #include "PianoRoll.h"
+#include "CompEditor.h"
+#include "MixerView.h"
 
 //==============================================================================
 //  Studio page (Stage 1, Step 4): the open song's transport, tempo,
@@ -48,6 +50,7 @@ private:
     TransportButton recordButton { "Record (R)",             TransportButton::Icon::record,  StudioColours::bad };
     TransportButton loopButton   { "Loop (L)",               TransportButton::Icon::loop,    StudioColours::gold };
     juce::TextButton punchButton { "Punch" };
+    juce::TextButton writeButton { "Write" };         // record automation (Step 13)
 
     // Song musical settings
     juce::Slider     tempoSlider { juce::Slider::IncDecButtons, juce::Slider::TextBoxLeft };
@@ -67,6 +70,14 @@ private:
     TimelineView timeline { engine };
     std::unique_ptr<ChordPanel> chordPanel;
     std::unique_ptr<PianoRoll> pianoRoll;
+    std::unique_ptr<MixerView> mixer;
+    juce::TextButton mixerButton { "Mixer" };
+    void setMixerOpen (bool);
+    bool isMixerOpen() const       { return mixer != nullptr && mixer->isVisible(); }
+    std::unique_ptr<CompEditor> compEditor;
+    void openCompEditor (te::WaveAudioClip*);
+    void closeCompEditor();
+    bool compact = false;
     void openPianoRoll (te::MidiClip*);
     void closePianoRoll();
     bool chordPanelOpen = true;

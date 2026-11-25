@@ -1,8 +1,11 @@
+#include "AudioEdit.h"
 #include "StudioEngine.h"
 #include "StudioKeysPlugin.h"
 #include "SamplerPlugin.h"
 #include "OrganPlugin.h"
 #include "ClickSounds.h"
+#include "Mixing.h"
+#include "Automation.h"
 #include <map>
 
 const char* StudioKeysPlugin::xmlTypeName = "GospelStudioKeys";
@@ -186,6 +189,10 @@ StudioEngine::StudioEngine()
 StudioEngine::~StudioEngine()
 {
     alive->store (false);
+    PluginHost::closeManager();
+    PluginHost::releaseScanner();
+    if (edit != nullptr)
+        PluginHost::closeAllWindows (*edit);
     displayKeyboard.removeListener (this);
     engine.getDeviceManager().removeChangeListener (this);
     for (auto& [device, client] : inputMeters)
@@ -246,6 +253,18 @@ int StudioEngine::getSetting (const juce::String& key, int defaultValue)
 }
 
 void StudioEngine::setSetting (const juce::String& key, int value)
+{
+    auto settings = openAppSettings();
+    settings->setValue (key, value);
+    settings->saveIfNeeded();
+}
+
+juce::String StudioEngine::getTextSetting (const juce::String& key, const juce::String& defaultValue)
+{
+    return openAppSettings()->getValue (key, defaultValue);
+}
+
+void StudioEngine::setTextSetting (const juce::String& key, const juce::String& value)
 {
     auto settings = openAppSettings();
     settings->setValue (key, value);
@@ -317,9 +336,13 @@ float StudioEngine::getCpuUsage() const { return engine.getDeviceManager().getCp
 //==============================================================================
 void StudioEngine::loadEdit (const juce::File& file)
 {
+    if (edit != nullptr && onEditAboutToChange)
+        onEditAboutToChange();
+
     if (edit != nullptr)
     {
         edit->getTransport().stop (false, true);
+        PluginHost::closeAllWindows (*edit);
         save();
         edit.reset();
     }
@@ -345,6 +368,11 @@ void StudioEngine::loadEdit (const juce::File& file)
         createStarterLayout();
 
     assignInputs();
+
+    // Shared reverb and delay, master meter (Step 12). Not something to undo.
+    Mixing::prepareSong (*edit);
+    Automation::setWriting (*edit, false);      // play back automation; record only when "Write" is on
+    edit->getUndoManager().clearUndoHistory();
 }
 
 te::AudioTrack* StudioEngine::getKeysTrack() const
@@ -372,12 +400,108 @@ void StudioEngine::addInstrument (te::AudioTrack& track, const juce::String& ins
         setInstrument (track, instrumentId);
 }
 
+namespace
+{
+    // A plugin instrument stays the track's instrument even when it is not
+    // installed on this computer (then it cannot say it is a synth).
+    const juce::Identifier gpsInstrumentFlag ("gpsInstrument");
+
+    bool isInstrumentPlugin (te::Plugin& p)
+    {
+        return p.isSynth() || (PluginHost::isPlugin (&p) && (bool) p.state.getProperty (gpsInstrumentFlag, false));
+    }
+
+    bool isMixerPlugin (te::Plugin& p)   { return Mixing::isMixerPlugin (p); }
+}
+
 te::Plugin* StudioEngine::getInstrumentPlugin (te::AudioTrack& track)
 {
     for (auto* p : track.pluginList.getPlugins())
-        if (p->isSynth())
+        if (isInstrumentPlugin (*p))
             return p;
     return nullptr;
+}
+
+te::Plugin* StudioEngine::setPluginInstrument (te::AudioTrack& track, const juce::PluginDescription& desc)
+{
+    if (edit == nullptr)
+        return nullptr;
+
+    for (auto* p : track.pluginList.getPlugins())
+        if (isInstrumentPlugin (*p))
+            p->deleteFromParent();
+
+    auto plugin = edit->getPluginCache().createNewPlugin (te::ExternalPlugin::xmlTypeName, desc);
+    if (plugin == nullptr)
+        return nullptr;
+
+    plugin->state.setProperty (gpsInstrumentFlag, true, nullptr);
+    track.pluginList.insertPlugin (plugin, 0, nullptr);
+    return plugin.get();
+}
+
+te::Plugin* StudioEngine::addEffect (te::AudioTrack& track, const juce::PluginDescription& desc)
+{
+    if (edit == nullptr)
+        return nullptr;
+    return addEffect (track, edit->getPluginCache().createNewPlugin (te::ExternalPlugin::xmlTypeName, desc));
+}
+
+te::Plugin* StudioEngine::addEffect (te::AudioTrack& track, te::Plugin::Ptr plugin)
+{
+    if (plugin == nullptr)
+        return nullptr;
+
+    // After the instrument and the other effects, before the track's volume and meter
+    int index = 0;
+    const auto plugins = track.pluginList.getPlugins();
+    for (int i = 0; i < plugins.size(); ++i)
+    {
+        if (isMixerPlugin (*plugins[i]))
+            break;
+        index = i + 1;
+    }
+    track.pluginList.insertPlugin (plugin, index, nullptr);
+    return plugin.get();
+}
+
+std::vector<te::Plugin*> StudioEngine::getEffects (te::AudioTrack& track)
+{
+    std::vector<te::Plugin*> result;
+    for (auto* p : track.pluginList.getPlugins())
+        if (! isInstrumentPlugin (*p) && ! isMixerPlugin (*p))
+            result.push_back (p);
+    return result;
+}
+
+void StudioEngine::removeEffect (te::Plugin& p)
+{
+    if (p.windowState != nullptr)
+        p.windowState->closeWindowExplicitly();
+    p.deleteFromParent();
+}
+
+void StudioEngine::moveEffect (te::Plugin& p, int delta)
+{
+    auto* track = dynamic_cast<te::AudioTrack*> (p.getOwnerTrack());
+    if (track == nullptr)
+        return;
+
+    const auto effects = getEffects (*track);
+    const auto it = std::find (effects.begin(), effects.end(), &p);
+    if (it == effects.end())
+        return;
+    const auto pos = (int) (it - effects.begin()) + delta;
+    if (pos < 0 || pos >= (int) effects.size())
+        return;
+
+    auto* other = effects[(size_t) pos];
+    const auto plugins = track->pluginList.getPlugins();
+    const auto target = plugins.indexOf (other);
+
+    te::Plugin::Ptr keep (&p);
+    p.removeFromParent();
+    track->pluginList.insertPlugin (keep, target, nullptr);
 }
 
 juce::String StudioEngine::getInstrumentId (te::AudioTrack& track)
@@ -386,6 +510,7 @@ juce::String StudioEngine::getInstrumentId (te::AudioTrack& track)
     if (auto* s = dynamic_cast<SamplerPlugin*> (p)) return s->instrumentId.get();
     if (dynamic_cast<OrganPlugin*> (p) != nullptr)  return "organ";
     if (dynamic_cast<StudioKeysPlugin*> (p) != nullptr) return "studioKeys";
+    if (PluginHost::isPlugin (p))                     return "plugin";
     return {};
 }
 
@@ -401,6 +526,8 @@ juce::String StudioEngine::describeInstrument (te::AudioTrack& track)
     }
     if (auto* o = dynamic_cast<OrganPlugin*> (p))
         return "Gospel Organ  " + o->getRegistration();
+    if (PluginHost::isPlugin (p))
+        return PluginHost::describe (*p);
     return p->getName();
 }
 
@@ -419,7 +546,7 @@ void StudioEngine::setInstrument (te::AudioTrack& track, const juce::String& ins
         }
 
     for (auto* p : track.pluginList.getPlugins())
-        if (p->isSynth())
+        if (isInstrumentPlugin (*p))
             p->deleteFromParent();
 
     const char* type = choice->kind == Instruments::Kind::organ   ? OrganPlugin::xmlTypeName
@@ -436,10 +563,7 @@ void StudioEngine::setInstrument (te::AudioTrack& track, const juce::String& ins
 
 bool StudioEngine::isInstrumentTrack (te::AudioTrack& track)
 {
-    for (auto* p : track.pluginList.getPlugins())
-        if (p->isSynth())
-            return true;
-    return false;
+    return getInstrumentPlugin (track) != nullptr;
 }
 
 void StudioEngine::createStarterLayout()
@@ -465,6 +589,8 @@ te::AudioTrack* StudioEngine::addTrack (bool instrument, const juce::String& nam
     if (edit == nullptr)
         return nullptr;
 
+    if (after == nullptr)
+        after = Mixing::getSongTracks (*edit).getLast();     // before the shared reverb/delay
     const auto insertPoint = after != nullptr ? te::TrackInsertPoint (*after, false)
                                               : te::TrackInsertPoint::getEndOfTracks (*edit);
 
@@ -744,6 +870,13 @@ void StudioEngine::toggleRecord()
     if (t.isRecording())
     {
         t.stop (false, false);
+
+        // New recordings crossfade with their neighbours automatically
+        for (auto* track : te::getAudioTracks (*edit))
+            for (auto* c : track->getClips())
+                if (auto* ac = dynamic_cast<te::AudioClipBase*> (c))
+                    if (! ac->getAutoCrossfade())
+                        AudioEdit::prepare (*ac);
         save();
     }
     else
@@ -1085,5 +1218,7 @@ te::Clip* StudioEngine::importAudio (te::AudioTrack& track, const juce::File& fi
     const auto start = te::TimePosition::fromSeconds (juce::jmax (0.0, startSeconds));
     const te::ClipPosition position { { start, start + te::TimeDuration::fromSeconds (audioFile.getLength()) }, {} };
     auto clip = track.insertWaveClip (file.getFileNameWithoutExtension(), source, position, false);
+    if (clip != nullptr)
+        AudioEdit::prepare (*clip);
     return clip.get();
 }

@@ -510,6 +510,13 @@ namespace InstrumentPanel
 {
     void open (StudioEngine& engine, te::AudioTrack& track)
     {
+        // A VST3 instrument has its own window
+        if (auto* p = StudioEngine::getInstrumentPlugin (track); PluginHost::isPlugin (p))
+        {
+            PluginHost::showWindow (*p);
+            return;
+        }
+
         currentWindow() = std::make_unique<PanelWindow> (engine, track);
         currentWindow()->toFront (true);
     }

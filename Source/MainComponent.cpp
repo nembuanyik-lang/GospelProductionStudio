@@ -42,6 +42,24 @@ MainComponent::MainComponent()
     soundsButton.onClick = [] { SoundLibrary::openWindow(); };
     addAndMakeVisible (soundsButton);
 
+    pluginsButton.setWantsKeyboardFocus (false);
+    pluginsButton.setTooltip ("Find the VST3 instruments and effects installed on this computer");
+    pluginsButton.onClick = [this] { PluginHost::openManager (studio.getEngine()); };
+    addAndMakeVisible (pluginsButton);
+
+    // The on-screen keyboard can be hidden to give small screens more room
+    keyboardShown = StudioEngine::getSetting ("showKeyboard", 1) != 0;
+    keyboardButton.setWantsKeyboardFocus (false);
+    keyboardButton.setTooltip ("Show or hide the on-screen keyboard (your MIDI keyboard always works)");
+    keyboardButton.onClick = [this]
+    {
+        keyboardShown = ! keyboardShown;
+        StudioEngine::setSetting ("showKeyboard", keyboardShown ? 1 : 0);
+        resized();
+        repaint();
+    };
+    addAndMakeVisible (keyboardButton);
+
     updateNowButton.setColour (juce::TextButton::buttonColourId, StudioColours::gold);
     updateNowButton.setColour (juce::TextButton::textColourOffId, StudioColours::header);
     updateNowButton.onClick = [this] { startUpdate(); };
@@ -293,15 +311,16 @@ void MainComponent::paint (juce::Graphics& g)
     g.setColour (gold);
     g.fillRect (headerBox.removeFromBottom (2));
 
-    auto titleArea = headerBox.reduced (24, 0);
+    auto titleArea = headerBox.reduced (compactLayout ? 16 : 24, 0);
     g.setColour (text);
-    g.setFont (studioFont (24.0f, true));
-    g.drawText ("Gospel Production Studio", titleArea.removeFromTop (44).withTrimmedTop (10),
+    g.setFont (studioFont (compactLayout ? 18.0f : 24.0f, true));
+    g.drawText (compactLayout ? "Gospel Studio" : "Gospel Production Studio",
+                titleArea.removeFromTop (compactLayout ? 30 : 44).withTrimmedTop (compactLayout ? 6 : 10),
                 juce::Justification::bottomLeft);
 
     const auto dot = juce::String::fromUTF8 ("  \xc2\xb7  ");
     g.setColour (gold);
-    g.setFont (studioFont (13.0f));
+    g.setFont (studioFont (compactLayout ? 11.0f : 13.0f));
     g.drawText (page == Page::library ? "STAGE 1" + dot + "SONG LIBRARY"
               : page == Page::studio  ? "STAGE 1" + dot + "STUDIO"
                                       : "STAGE 0" + dot + "ENGINE & DEVICES",
@@ -333,7 +352,7 @@ void MainComponent::paint (juce::Graphics& g)
     g.fillRect (footerArea);
     g.setColour (textDim);
     g.setFont (studioFont (12.0f));
-    g.drawText ("Stage 2" + dot + "Step 9 of 22" + dot + "Audio recording",
+    g.drawText ("Stage 2" + dot + "Step 13 of 22" + dot + "Automation",
                 footerArea.reduced (24, 0), juce::Justification::centredLeft);
     g.drawText ("v" + juce::String (JUCE_APPLICATION_VERSION_STRING),
                 footerArea.reduced (24, 0), juce::Justification::centredRight);
@@ -431,20 +450,30 @@ void MainComponent::resized()
 {
     auto area = getLocalBounds();
 
-    headerArea = area.removeFromTop (76);
-    footerArea = area.removeFromBottom (30);
+    // Small laptop screens (for example 1366 x 768) get a compact layout
+    compactLayout = getHeight() < 800 || getWidth() < 1300;
 
-    auto headerInner = headerArea.reduced (24, 20);
-    setupButton.setBounds (headerInner.removeFromRight (180));
+    headerArea = area.removeFromTop (compactLayout ? 50 : 76);
+    footerArea = area.removeFromBottom (compactLayout ? 24 : 30);
+
+    keyboardButton.setButtonText (keyboardShown ? "Hide keyboard" : "Show keyboard");
+    keyboardButton.setBounds (footerArea.reduced (compactLayout ? 16 : 24, 2).removeFromRight (120).translated (-70, 0));
+
+    auto headerInner = headerArea.reduced (compactLayout ? 16 : 24, compactLayout ? 9 : 20);
+    setupButton.setButtonText (compactLayout ? "Audio Setup" : "Audio & MIDI Setup");
+    soundsButton.setButtonText (compactLayout ? "Sounds" : "Sound Library");
+    setupButton.setBounds (headerInner.removeFromRight (compactLayout ? 120 : 180));
     headerInner.removeFromRight (8);
-    updatesButton.setBounds (headerInner.removeFromRight (100));
-    headerInner.removeFromRight (10);
-    soundsButton.setBounds (headerInner.removeFromRight (140));
-    headerInner.removeFromLeft (320);
+    updatesButton.setBounds (headerInner.removeFromRight (compactLayout ? 90 : 100));
+    headerInner.removeFromRight (8);
+    soundsButton.setBounds (headerInner.removeFromRight (compactLayout ? 90 : 140));
+    headerInner.removeFromRight (8);
+    pluginsButton.setBounds (headerInner.removeFromRight (compactLayout ? 80 : 100));
+    headerInner.removeFromLeft (compactLayout ? 170 : 320);
     for (auto* tab : { &libraryTab, &studioTab, &engineTab })
     {
-        tab->setBounds (headerInner.removeFromLeft (tab == &engineTab ? 160 : 120));
-        headerInner.removeFromLeft (8);
+        tab->setBounds (headerInner.removeFromLeft (tab == &engineTab ? (compactLayout ? 150 : 160) : (compactLayout ? 104 : 120)));
+        headerInner.removeFromLeft (compactLayout ? 6 : 8);
     }
 
     if (bannerVisible)
@@ -457,9 +486,14 @@ void MainComponent::resized()
     }
 
     // Keyboard along the bottom: 52 white keys across the full width.
-    auto keyboardArea = area.removeFromBottom (page == Page::engine ? 140 : 96).reduced (24, 10);
-    keyboard.setBounds (keyboardArea);
-    keyboard.setKeyWidth ((float) keyboardArea.getWidth() / 52.0f);
+    keyboard.setVisible (keyboardShown || page == Page::engine);
+    if (keyboard.isVisible())
+    {
+        const auto kh = page == Page::engine ? (compactLayout ? 100 : 140) : (compactLayout ? 66 : 96);
+        auto keyboardArea = area.removeFromBottom (kh).reduced (compactLayout ? 16 : 24, compactLayout ? 6 : 10);
+        keyboard.setBounds (keyboardArea);
+        keyboard.setKeyWidth ((float) keyboardArea.getWidth() / 52.0f);
+    }
 
     libraryPage.setBounds (area);
     studioPage.setBounds (area);

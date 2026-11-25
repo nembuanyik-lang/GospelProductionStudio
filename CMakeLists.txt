@@ -4,7 +4,7 @@
 # =============================================================================
 cmake_minimum_required(VERSION 3.22)
 
-project(GospelProductionStudio VERSION 0.8.0 LANGUAGES C CXX)
+project(GospelProductionStudio VERSION 0.12.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -74,7 +74,14 @@ target_sources(GospelProductionStudio PRIVATE
     Source/RenderTest.cpp
     Source/SoundLibrary.cpp
     Source/InstrumentPanel.cpp
-    Source/Takes.cpp)
+    Source/Takes.cpp
+    Source/AudioEdit.cpp
+    Source/CompEditor.cpp
+    Source/PluginHost.cpp
+    Source/Mixing.cpp
+    Source/MixerView.cpp
+    Source/Automation.cpp
+    Source/AutomationLane.cpp)
 
 target_include_directories(GospelProductionStudio PRIVATE Source)
 
@@ -86,6 +93,7 @@ target_compile_definitions(GospelProductionStudio PRIVATE
     JUCE_MODAL_LOOPS_PERMITTED=1
     JUCE_STRICT_REFCOUNTEDPOINTER=1
     TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1
+    TRACKTION_ENABLE_TIMESTRETCH_SIGNALSMITH=1
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:GospelProductionStudio,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:GospelProductionStudio,JUCE_VERSION>")
 

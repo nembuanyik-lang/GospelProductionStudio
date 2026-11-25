@@ -61,6 +61,9 @@ private:
     juce::TextButton setupButton { "Audio & MIDI Setup" };
     juce::TextButton updatesButton { "Updates" };
     juce::TextButton soundsButton { "Sound Library" };
+    juce::TextButton pluginsButton { "Plugins" };
+    juce::TextButton keyboardButton { "Hide keyboard" };
+    bool compactLayout = false, keyboardShown = true;
 
     // Updates
     Updater updater;

@@ -3,6 +3,7 @@
 #include <tracktion_engine/tracktion_engine.h>
 #include "MemoRecorder.h"
 #include "Song.h"
+#include "PluginHost.h"
 
 namespace te = tracktion;
 
@@ -55,6 +56,10 @@ public:
     bool hasOpenSong() const                                 { return openSongId.isNotEmpty(); }
     void applySongSettings (const Song&);                    // tempo, time signature, key
     void save();
+
+    // Called just before the current song is closed: screens must let go of its
+    // clips, tracks and plugins here (they are deleted right after).
+    std::function<void()> onEditAboutToChange;
     void autosaveIfChanged();                                // called every few seconds
 
     //==========================================================================
@@ -91,6 +96,14 @@ public:
     static te::Plugin* getInstrumentPlugin (te::AudioTrack&);
     static juce::String getInstrumentId (te::AudioTrack&);
     static juce::String describeInstrument (te::AudioTrack&);       // "Grand Piano", "Grand Piano (not downloaded)"
+
+    // Plugins (Step 11): a VST3 instrument in place of ours, and effects after it
+    te::Plugin* setPluginInstrument (te::AudioTrack&, const juce::PluginDescription&);
+    te::Plugin* addEffect (te::AudioTrack&, const juce::PluginDescription&);
+    te::Plugin* addEffect (te::AudioTrack&, te::Plugin::Ptr);              // built-in effects (Step 12)
+    static std::vector<te::Plugin*> getEffects (te::AudioTrack&);
+    static void removeEffect (te::Plugin&);
+    static void moveEffect (te::Plugin&, int delta);       // -1 earlier, +1 later in the chain
     void deleteTrack (te::AudioTrack&);
     void setArmedTrack (te::AudioTrack*);
     te::AudioTrack* getArmedTrack() const;
@@ -113,6 +126,8 @@ public:
     // Small app-wide settings (chord display, voicing...)
     static int  getSetting (const juce::String& key, int defaultValue);
     static void setSetting (const juce::String& key, int value);
+    static juce::String getTextSetting (const juce::String& key, const juce::String& defaultValue);
+    static void setTextSetting (const juce::String& key, const juce::String& value);
 
     static juce::StringArray countInNames()                 { return { "No count-in", "1 bar", "2 bars", "1 beat", "2 beats" }; }
     void  setCountIn (int index);                           // index into countInNames()
@@ -155,7 +170,7 @@ private:
     struct AuxCallback;
     struct Mirror;
 
-    te::Engine engine { "GospelProductionStudio" };
+    te::Engine engine { "GospelProductionStudio", PluginHost::createUIBehaviour(), nullptr };
     std::unique_ptr<te::Edit> edit;
     juce::String openSongId;
     juce::File scratchFile;

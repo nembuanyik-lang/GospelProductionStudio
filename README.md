@@ -46,6 +46,82 @@ From version 0.4.0 the app updates itself from your GitHub Releases:
 
 ---
 
+## Stage 2, Step 13 test: Automation
+
+| # | Test | Pass when |
+|---|------|-----------|
+| 1 | Show a lane | Click **A** on a track: a lane opens under it showing "Volume" as a dashed line |
+| 2 | Draw | Click in the lane at bar 9 (high), bar 13 (low): a line joins the points. Play: the volume follows the line, and the fader moves by itself |
+| 3 | Edit points | Drag a point (it shows the value, for example "-12.0 dB"); hold Shift to move without snapping; double-click or right-click a point to remove it |
+| 4 | Choose the setting | Click "Volume" in the track header: choose Pan, Reverb send, Delay send, or a setting of an effect or plugin (for example EQ > Mid gain 2). A dot marks settings that already have a line |
+| 5 | Last chorus lift | On Choir draw the volume a little higher from the last chorus; on Lead Vocal raise "Reverb send" on the final note |
+| 6 | Record by hand | Turn on **Write** (red), play the song and move a fader in the Mixer (or a track's volume slider): when you let go, the movement has become points in the lane. Turn Write off when done |
+| 7 | Clear | Right-click in the lane > "Remove all points on this line" |
+| 8 | Hide | Click A again (or right-click > Hide): the lane closes, the automation still plays. The A turns gold on tracks that have automation |
+| 9 | Undo and save | Ctrl+Z undoes point changes; switching songs and back keeps everything |
+
+---
+
+## Stage 2, Step 12 test: The mixer
+
+| # | Test | Pass when |
+|---|------|-----------|
+| 1 | Open | In the Studio press **Mixer** (or X): every track has a strip, then Reverb and Delay (shared), and Master on the right. "Tracks" (or X) goes back |
+| 2 | Faders | Play the song and move a fader: that part gets louder or softer, the meter moves, the dB value shows. Double-click: back to 0 dB |
+| 3 | Meters | Green while normal, amber near the top, red when too loud. The little bar at the top of a meter turns red after clipping (click it to clear) |
+| 4 | Pan | Turn Pan on the organ left and the piano right: they separate in headphones |
+| 5 | Shared reverb | Turn "Rev" up on Lead Vocal and Choir: they sound as if in the same church. Turn it fully left (or double-click) for "off" |
+| 6 | Shared delay | Turn "Dly" up on Lead Vocal: echoes in time with the song |
+| 7 | Reverb room | Click "Reverb" on the Reverb strip: choose a starting point (Small room, Church, Big cathedral) |
+| 8 | Built-in effects | On Lead Vocal click "+ Effect" > "EQ (4 bands)", then choose the starting point "Lead vocal: clear"; add "Compressor" > "Lead vocal: gentle" |
+| 9 | Plugin effects | "+ Effect" also lists your VST3 effects (Step 11) |
+| 10 | Effect options | Right-click an effect on a strip: open, turn off (it shows crossed out), move earlier or later, remove |
+| 11 | Master | "+ Effect" on Master works on the whole song (for example a gentle compressor) |
+| 12 | Mute and solo | M and S on a strip work, and match the tracks view |
+| 13 | Undo | Ctrl+Z undoes fader, pan, send and effect changes |
+| 14 | Saved | Switch to another song and back: every fader, send and effect is as you left it |
+
+---
+
+## Stage 2, Step 11 test: Plugins (VST3)
+
+Before testing: install at least one free VST3 instrument (for example Spitfire LABS) and one VST3 effect (for example Valhalla Supermassive or TDR Nova) with their own installers. They go into C:\Program Files\Common Files\VST3.
+
+| # | Test | Pass when |
+|---|------|-----------|
+| 1 | Scan | Press **Plugins** at the top, then "Scan for plugins": it says "Checking 1 of N..." and then lists each plugin as Instrument or Effect, "Ready" |
+| 2 | A faulty plugin | If a plugin crashes or hangs while being checked, the studio keeps running: that plugin shows "Failed" and is skipped next time ("Try failed again" retries it) |
+| 3 | Other folders | "Add a folder..." for plugins kept somewhere else (for example D:\VST3): they are found too |
+| 4 | Plugin instrument | Right-click Keys > Change instrument > "Your plugins (VST3)" > pick one: its own window opens, the track shows its name, and your MIDI keyboard plays it |
+| 5 | Open it again | Click the instrument name under the track name: the plugin's window opens |
+| 6 | New plugin track | "+ Track" > "Plugin instrument (VST3)": a new track with that instrument |
+| 7 | Effect | Right-click Lead Vocal > Effects > pick a reverb: its window opens and the track shows "+1 FX" |
+| 8 | Effect order | Add a second effect, then Effects > "1. ..." > "Move later": the order changes (you hear the difference with EQ then reverb, or reverb then EQ) |
+| 9 | Bypass and remove | Effects > the effect > "Turn off (bypass)" shows "(off)"; "Remove" takes it away; Ctrl+Z brings it back |
+| 10 | Saved with the song | Change a knob in a plugin, switch to another song and back: the plugin and its settings are still there |
+| 11 | Song from another computer | If a plugin is not installed, the track says "(not installed)" in orange, nothing crashes, and its settings stay safe in the song until you install it |
+
+---
+
+## Stage 2, Step 10 test: Comping and audio editing
+
+| # | Test | Pass when |
+|---|------|-----------|
+| 1 | Comp editor | Record 3 takes in a loop, right-click the clip > "Comp takes...": each take is a row with its waveform and a Listen button |
+| 2 | Pick the best parts | Drag across take 2 where it was best, click take 3 for another part: the Comp row shows T1, T2, T3 blocks |
+| 3 | Make the comp | Press "Make comp": a new take "Comp" is added and selected; playing the song plays the chosen parts with smooth joins |
+| 4 | Split | Click a clip, put the playhead where you want to cut and press S (or right-click > Split): two clips, no click at the cut |
+| 5 | Trim | Drag a clip's left or right edge: the clip gets shorter or longer |
+| 6 | Fades | Drag the small square at a clip's top-left (fade in) or top-right (fade out): a shaded corner appears and the sound fades. Right-click > Fades for the shape |
+| 7 | Crossfade | Drag one clip so it overlaps another on the same track: the overlap blends smoothly |
+| 8 | Clip gain | Right-click > "Clip gain, pitch and speed...": move Gain; the clip shows "dB" and the waveform grows or shrinks |
+| 9 | Normalise | Right-click > Normalise: a quiet clip becomes full level (peak -1 dB) |
+| 10 | Pitch | In the same window, move Pitch by +2: the clip sounds a tone higher, same speed; the clip shows "+2.0" |
+| 11 | Speed | Move Speed to 90% with "Keep pitch" ticked: slower, same key, the clip gets longer. Untick it for the tape effect (slower and lower) |
+| 12 | Undo | Ctrl+Z reverses each edit |
+
+---
+
 ## Stage 2, Step 9 test: Audio recording
 
 Before testing: plug in the audio interface, open **Audio & MIDI Setup**, choose it, and tick its input channels.
@@ -279,6 +355,13 @@ GospelProductionStudio\
     InstrumentPanel.*      instrument settings window (drawbars etc.)
     Grooves.*              starter drum grooves
     Takes.*                choosing takes on recorded clips
+    AudioEdit.*            split, fades, normalise, pitch and speed, comp plans and comp rendering
+    CompEditor.*           the comping window: pick the best parts of each take
+    PluginHost.*           VST3 plugins: safe scanning, the Plugins window, plugin windows
+    Mixing.*               shared reverb and delay, sends, built-in effects and their starting points
+    MixerView.*            the mixer: channel strips, meters, master
+    Automation.*           which settings can change during the song, recording by hand
+    AutomationLane.*       the line under a track: draw, drag and remove points
     RenderTest.*           developer check: renders each instrument to WAV
   tools\make_sound_packs.py builds the sound packs (run by the GitHub workflow)
     Updater.*              automatic updates from GitHub Releases
@@ -294,4 +377,4 @@ GospelProductionStudio\
 
 ## What comes next
 
-**Stage 2, Step 10: Comping and audio editing.** Build the best performance from several takes (comping), split, trim, fade and crossfade audio, clip gain, time-stretch and pitch-shift.
+**Stage 2, Step 14: Bouncing and exporting.** Save the finished song as a WAV or MP3 for WhatsApp, radio or streaming, export each track separately (stems) for another studio, and freeze heavy tracks to save computer power.

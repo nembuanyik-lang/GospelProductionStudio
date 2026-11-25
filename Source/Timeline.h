@@ -57,7 +57,9 @@ private:
     bool isInstrument = false;
 
     juce::Label name;
-    juce::TextButton muteButton { "M" }, soloButton { "S" }, armButton { "R" };
+    juce::TextButton muteButton { "M" }, soloButton { "S" }, armButton { "R" }, autoButton { "A" };
+    juce::TextButton autoParamButton;           // which setting the automation lane shows (Step 13)
+    void showAutomationMenu();
     juce::Slider volume { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
     juce::TextButton addSectionButton { "+ Section" };
 };
@@ -79,7 +81,7 @@ public:
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
 private:
-    enum class Drag { none, move, trimStart, trimEnd };
+    enum class Drag { none, move, trimStart, trimEnd, fadeIn, fadeOut };
 
     // Chord lane
     int  chordAt (juce::Point<int>, const std::vector<ChordTrack::Event>&) const;
@@ -92,6 +94,7 @@ private:
 
     std::map<te::EditItemID, std::unique_ptr<te::SmartThumbnail>> thumbnails;
     std::map<te::EditItemID, juce::File> thumbnailFiles;
+    friend class TimelineView;
 
     te::Clip* clipAt (juce::Point<int>, int& laneIndex) const;
     juce::Rectangle<float> clipBounds (te::Clip&, int laneIndex) const;
@@ -116,6 +119,7 @@ public:
     ~TimelineView() override;
 
     void editChanged();                     // call after a song is opened or closed
+    void releaseEdit();                     // call before the song is closed
 
     // Geometry ---------------------------------------------------------------
     static constexpr int headerWidth = 230, rulerHeight = 40, sectionLaneHeight = 34, chordLaneHeight = 38, trackHeight = 66;
@@ -135,7 +139,7 @@ public:
     int  getNumLanes() const                { return (int) lanes.size(); }
     te::Track* getLane (int i) const        { return juce::isPositiveAndBelow (i, (int) lanes.size()) ? lanes[(size_t) i] : nullptr; }
     int  getLaneY (int i) const;
-    int  getLaneHeight (int i) const        { return i == 0 ? sectionLaneHeight : i == chordLane ? chordLaneHeight : trackHeight; }
+    int  getLaneHeight (int i) const;       // a track with its automation lane open is taller
     int  laneAtY (int y) const;
     int  getContentHeight() const;
     int  scrollY = 0;
@@ -164,6 +168,9 @@ public:
     std::function<void (te::MidiClip*)> onOpenClip;          // piano roll (Step 7)
     void openClip (te::Clip*);
     void insertGroove (te::AudioTrack&, const Grooves::Groove&, double beat);
+    void splitAtPlayhead();
+    void showClipSettings (te::Clip&);
+    std::function<void (te::WaveAudioClip*)> onOpenComp;
     void importAudioTo (te::AudioTrack&);
     std::function<juce::File()> getMemoFile;
     std::unique_ptr<juce::FileChooser> chooser;
@@ -210,6 +217,7 @@ private:
     TimelineLanes lanesView { *this };
     juce::Component headerHolder;
     juce::OwnedArray<juce::Component> headers;
+    juce::OwnedArray<juce::Component> automationLanes;      // children of lanesView (Step 13)
     juce::ScrollBar hScroll { false }, vScroll { true };
     juce::Rectangle<int> toolbarArea, cornerArea;
 
