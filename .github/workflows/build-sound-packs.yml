@@ -1,0 +1,43 @@
+name: Build sound packs
+
+# Run once from the GitHub "Actions" tab: choose this workflow, then "Run workflow".
+# It downloads the free piano, bass and drum libraries ON GITHUB'S SERVERS,
+# makes compact packs and publishes them as the release "sounds-v1".
+# The app's Sound Library downloads each pack from there, once.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  packs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Get project files
+        uses: actions/checkout@v4
+
+      - name: Install tools (7-Zip, FFmpeg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full ffmpeg
+
+      - name: Build the sound packs
+        run: python3 tools/make_sound_packs.py --out dist
+
+      - name: Publish release "sounds-v1"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: sounds-v1
+          name: Sound packs (v1)
+          body: |
+            Sound packs for Gospel Production Studio. Install them from the app: Sound Library.
+            Grand Piano: Salamander Grand Piano V3 by Alexander Holm (CC-BY 3.0).
+            Upright Piano: Upright Piano KW, FreePats (CC0).
+            Electric Bass: samples by Andrea Biasior, FreePats (CC0).
+            Drum Kit: MuldjordKit by Lars Muldjord / DrumGizmo team, FreePats (CC-BY 4.0).
+          prerelease: true
+          make_latest: false
+          files: dist/*
