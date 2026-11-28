@@ -4,7 +4,7 @@
 # =============================================================================
 cmake_minimum_required(VERSION 3.22)
 
-project(GospelProductionStudio VERSION 0.12.0 LANGUAGES C CXX)
+project(GospelProductionStudio VERSION 1.3.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -47,7 +47,14 @@ juce_add_gui_app(GospelProductionStudio
     PRODUCT_NAME  "Gospel Production Studio"
     COMPANY_NAME  "Minister Kemamah"
     BUNDLE_ID     "com.ministerkemamah.gospelproductionstudio"
+    ICON_BIG      "${CMAKE_CURRENT_SOURCE_DIR}/Branding/icon-512.png"
+    ICON_SMALL    "${CMAKE_CURRENT_SOURCE_DIR}/Branding/icon-64.png"
     VERSION       ${PROJECT_VERSION})
+
+# The logo, built into the app (header and window icon)
+juce_add_binary_data(GpsBranding SOURCES
+    Branding/logo-icon.svg
+    Branding/icon-256.png)
 
 target_sources(GospelProductionStudio PRIVATE
     Source/Main.cpp
@@ -71,6 +78,31 @@ target_sources(GospelProductionStudio PRIVATE
     Source/SamplerPlugin.cpp
     Source/OrganPlugin.cpp
     Source/Grooves.cpp
+    Source/DrumGrid.cpp
+    Source/MySounds.cpp
+    Source/Loops.cpp
+    Source/DeEsserPlugin.cpp
+    Source/Timing.cpp
+    Source/Harmony.cpp
+    Source/TempoFollow.cpp
+    Source/BackgroundWork.cpp
+    Source/RealFeel.cpp
+    Source/SongFiles.cpp
+    Source/LatencyCheck.cpp
+    Source/SongSafety.cpp
+    Source/Backing.cpp
+    Source/GuitarPlugin.cpp
+    Source/Percussion.cpp
+    Source/ChordDetect.cpp
+    Source/Stems.cpp
+    Source/Help.cpp
+    Source/Learn.cpp
+    Source/LearnCourse.cpp
+    Source/Analysis.cpp
+    Source/AnalyserPlugin.cpp
+    Source/AnalyserPage.cpp
+    Source/Release.cpp
+    Source/ReleasePage.cpp
     Source/RenderTest.cpp
     Source/SoundLibrary.cpp
     Source/InstrumentPanel.cpp
@@ -81,7 +113,13 @@ target_sources(GospelProductionStudio PRIVATE
     Source/Mixing.cpp
     Source/MixerView.cpp
     Source/Automation.cpp
-    Source/AutomationLane.cpp)
+    Source/AutomationLane.cpp
+    Source/Mp3Encoder.cpp
+    Source/Exporter.cpp
+    Source/ExportPage.cpp
+    Source/MasterPlugin.cpp
+    Source/MasteringPage.cpp
+    Source/VocalTunePlugin.cpp)
 
 target_include_directories(GospelProductionStudio PRIVATE Source)
 
@@ -98,11 +136,16 @@ target_compile_definitions(GospelProductionStudio PRIVATE
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:GospelProductionStudio,JUCE_VERSION>")
 
 # -----------------------------------------------------------------------------
-#  ASIO (lowest-latency driver for audio interfaces on Windows)
-#  Optional now; switched on in Stage 2 once the Steinberg ASIO SDK
-#  (free download) is placed in libs/asiosdk.
+#  ASIO (lowest-latency driver for audio interfaces on Windows), Stage 2.
+#  The GitHub build downloads Steinberg's free ASIO SDK into libs/asiosdk;
+#  ASIO is switched on whenever it is there.
 # -----------------------------------------------------------------------------
-option(GPS_ENABLE_ASIO "Enable ASIO driver support (needs libs/asiosdk)" OFF)
+set(GPS_ASIO_DEFAULT OFF)
+if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libs/asiosdk/common/iasiodrv.h")
+    set(GPS_ASIO_DEFAULT ON)
+endif()
+option(GPS_ENABLE_ASIO "Enable ASIO driver support (needs libs/asiosdk)" ${GPS_ASIO_DEFAULT})
+message(STATUS "ASIO support: ${GPS_ENABLE_ASIO}")
 
 if(GPS_ENABLE_ASIO)
     target_compile_definitions(GospelProductionStudio PRIVATE JUCE_ASIO=1)
@@ -130,12 +173,51 @@ if(MSVC)
     target_compile_options(GospelProductionStudio PRIVATE /bigobj /utf-8)
 endif()
 
+# MP3 export (Step 14): the LAME encoder, if the build machine has it.
+# GitHub's Windows build installs it with vcpkg and passes GPS_LAME_ROOT.
+set(GPS_LAME_ROOT "" CACHE PATH "Folder with include/lame/lame.h and the LAME library")
+find_path(LAME_INCLUDE_DIR lame/lame.h HINTS "${GPS_LAME_ROOT}/include")
+find_library(LAME_LIBRARY NAMES mp3lame libmp3lame libmp3lame-static mp3lame-static HINTS "${GPS_LAME_ROOT}/lib")
+find_library(MPGHIP_LIBRARY NAMES mpghip libmpghip libmpghip-static mpghip-static HINTS "${GPS_LAME_ROOT}/lib")
+set(GPS_LAME_OK OFF)
+if(LAME_INCLUDE_DIR AND LAME_LIBRARY)
+    # Make sure it really links here (otherwise build without MP3 rather than fail)
+    include(CheckCXXSourceCompiles)
+    set(CMAKE_REQUIRED_INCLUDES "${LAME_INCLUDE_DIR}")
+    set(CMAKE_REQUIRED_LIBRARIES "${LAME_LIBRARY}")
+    if(MPGHIP_LIBRARY)
+        list(APPEND CMAKE_REQUIRED_LIBRARIES "${MPGHIP_LIBRARY}")
+    endif()
+    check_cxx_source_compiles("
+        #include <lame/lame.h>
+        int main() { lame_t l = lame_init(); float a[1] = {0}; unsigned char b[8192];
+                     lame_encode_buffer_ieee_float (l, a, a, 1, b, 8192); id3tag_init (l); lame_close (l); return 0; }"
+        GPS_LAME_LINKS)
+    unset(CMAKE_REQUIRED_INCLUDES)
+    unset(CMAKE_REQUIRED_LIBRARIES)
+    set(GPS_LAME_OK ${GPS_LAME_LINKS})
+endif()
+
+if(GPS_LAME_OK)
+    message(STATUS "MP3 export: LAME found (${LAME_LIBRARY})")
+    target_include_directories(GospelProductionStudio PRIVATE "${LAME_INCLUDE_DIR}")
+    target_link_libraries(GospelProductionStudio PRIVATE "${LAME_LIBRARY}")
+    if(MPGHIP_LIBRARY)
+        target_link_libraries(GospelProductionStudio PRIVATE "${MPGHIP_LIBRARY}")
+    endif()
+    target_compile_definitions(GospelProductionStudio PRIVATE GPS_HAVE_LAME=1)
+else()
+    message(STATUS "MP3 export: LAME not found, WAV only")
+    target_compile_definitions(GospelProductionStudio PRIVATE GPS_HAVE_LAME=0)
+endif()
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(GospelProductionStudio PRIVATE "-latomic")
 endif()
 
 target_link_libraries(GospelProductionStudio
     PRIVATE
+        GpsBranding
         tracktion::tracktion_core
         tracktion::tracktion_graph
         tracktion::tracktion_engine
