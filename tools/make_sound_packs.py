@@ -12,13 +12,18 @@ on the user's own connection. For each pack it:
 
 Usage:  python3 tools/make_sound_packs.py --out dist [--only id,id] [--source id=/local/archive]
 """
-import argparse, concurrent.futures, hashlib, json, os, re, shutil, subprocess, sys, tarfile, urllib.request, zipfile
+import argparse, concurrent.futures, hashlib, json, os, re, shutil, subprocess, sys, tarfile, urllib.parse, urllib.request, zipfile
 
 SALAMANDER = "https://freepats.zenvoid.org/Piano/SalamanderGrandPiano/SalamanderGrandPianoV3+20161209_44khz16bit.tar.xz"
 UPRIGHT    = "https://freepats.zenvoid.org/Piano/UprightPianoKW/UprightPianoKW-SFZ+FLAC-20220221.7z"
 BASS_FING  = "https://github.com/freepats/electric-bass-YR/releases/download/2019-09-30/FingerBassYR-SFZ+FLAC-20190930.7z"
 BASS_PICK  = "https://github.com/freepats/electric-bass-YR/releases/download/2019-09-30/PickedBassYR-SFZ+FLAC-20190930.7z"
 DRUMS      = "https://github.com/freepats/muldjordkit/releases/download/2020-10-18/MuldjordKit-SFZ+FLAC-20201018.7z"
+# Step 30: recorded guitars (both CC0, FreePats)
+GTR_CLEAN  = "https://github.com/freepats/electric-guitar-FSBS-clean/releases/download/2026-08-07/EGuitarFSBS-clean-SFZ+FLAC-20260807.7z"
+GTR_NYLON  = "https://freepats.zenvoid.org/Guitar/SpanishClassicalGuitar/SpanishClassicalGuitar-SFZ+FLAC-20190618.7z"
+# Step 31: hand percussion, bells and balafon from the Versilian Community Sample Library (CC0)
+VCSL       = "vcsl"
 
 PACKS = [
     dict(id="piano-grand", name="Grand Piano", category="Pianos", version="1",
@@ -42,6 +47,19 @@ PACKS = [
          description="Acoustic drum kit (Muldjord): kicks, snare, toms, hi-hat, crashes, rides. General MIDI layout.",
          licence="CC-BY 4.0", credit="MuldjordKit by Lars Muldjord / DrumGizmo team (FreePats)",
          instruments=[dict(name="Drum Kit", file="Kit.sfz", source=DRUMS, layers=None, quality=5)]),
+    dict(id="guitar-electric", name="Clean Electric Guitar", category="Guitars", version="1",
+         description="A Fender electric guitar through a clean amp. Praise picking, highlife and makossa lines, worship chords.",
+         licence="CC0", credit="FSBS Electric Guitar Clean #1 (FreePats)",
+         instruments=[dict(name="Clean Electric", file="Clean.sfz", source=GTR_CLEAN, layers=3, quality=4)]),
+    dict(id="guitar-nylon", name="Nylon Guitar", category="Guitars", version="1",
+         description="Spanish classical guitar with nylon strings. Soft worship ballads and fingerpicking.",
+         licence="CC0", credit="Spanish Classical Guitar by Roberto (FreePats)",
+         instruments=[dict(name="Nylon Guitar", file="Nylon.sfz", source=GTR_NYLON, layers=None, quality=5)]),
+    dict(id="percussion-african", name="African Percussion", category="Percussion", version="1",
+         description="Recorded congas, shakers, cabasa, tambourine, agogo bells, cowbell, claves, woodblock, claps and a balafon. "
+                     "Djembe and talking drum keep the built-in sound.",
+         licence="CC0", credit="Versilian Community Sample Library by Versilian Studios",
+         builder="vcsl_percussion", quality=5),
 ]
 
 AUDIO = (".wav", ".flac", ".ogg", ".aif", ".aiff")
@@ -315,17 +333,245 @@ def build_instrument(inst, work, pack_dir, cache, overrides, used_names, sample_
     with open(os.path.join(pack_dir, inst["file"]), "w") as f:
         f.write("\n".join(lines) + "\n")
 
+
+# ---------------------------------------------------------------------------
+#  Step 31: African percussion from VCSL. The library has no SFZ for our note
+#  layout, so the recordings are found by name, sorted by loudness into
+#  velocity layers, and mapped onto the app's percussion notes.
+VCSL_TREE = "https://api.github.com/repos/sgossner/VCSL/git/trees/master?recursive=1"
+VCSL_RAW  = "https://raw.githubusercontent.com/sgossner/VCSL/master/"
+VCSL_LFS  = "https://media.githubusercontent.com/media/sgossner/VCSL/master/"
+
+# note: (what it is, words in the folder/file path, preferred words in the file name, words that rule a file out)
+PERC_TARGETS = [
+    (63, "conga open",     ["conga"],      ["open", "tone"],              ["mute", "muted", "slap", "muff", "muffled", "closed", "bass", "heel", "toe", "tip", "quinto", "tumba"]),
+    (64, "conga low",      ["tumba"],      ["open", "tone"],              ["mute", "muted", "slap", "muff", "muffled", "closed", "heel", "toe", "tip"]),
+    (62, "conga mute",     ["conga"],      ["mute", "muted", "muff", "muffled", "closed", "slap"], ["tumba", "quinto"]),
+    (70, "shaker",         ["shaker"],     ["hit", "shake", "accent"],    ["roll", "loop", "trem", "tremolo"]),
+    (69, "cabasa",         ["cabasa"],     ["hit", "shake", "scrape"],    ["roll", "loop", "trem", "tremolo"]),
+    (54, "tambourine",     ["tambourine"], ["hit", "struck", "shake"],    ["roll", "loop", "trem", "tremolo", "thumb"]),
+    (67, "bell high",      ["agogo"],      ["hi", "high"],                ["lo", "low"]),
+    (68, "bell low",       ["agogo"],      ["lo", "low"],                 ["hi", "high"]),
+    (56, "cowbell",        ["cowbell"],    [],                            ["roll", "trem"]),
+    (75, "claves",         ["claves"],     [],                            ["roll", "trem"]),
+    (76, "woodblock",      ["woodblock"],  ["hi", "high"],                ["lo", "low", "roll", "trem"]),
+    (77, "woodblock low",  ["woodblock"],  ["lo", "low"],                 ["hi", "high", "roll", "trem"]),
+    (39, "clap",           ["clap", "claps"], [],                         ["slapstick"]),
+]
+# Sounds with alternatives: only taken if the file names say which one it is
+NEEDS_PREFERRED = {62, 67, 68, 76, 77}
+MAX_PER_SOUND = 12
+
+def tokens_of(text):
+    return [t for t in re.split(r"[^a-z0-9]+", text.lower()) if t]
+
+def vcsl_files(cache, local):
+    """Paths of every WAV in VCSL (from the GitHub file list, or a local copy for testing)."""
+    if local:
+        out = []
+        for root, _, files in os.walk(local):
+            for f in files:
+                if f.lower().endswith(".wav"):
+                    out.append(os.path.relpath(os.path.join(root, f), local).replace(os.sep, "/"))
+        return sorted(out)
+    os.makedirs(cache, exist_ok=True)
+    listing = os.path.join(cache, "vcsl-tree.json")
+    if not os.path.exists(listing):
+        log("Listing VCSL files on GitHub")
+        req = urllib.request.Request(VCSL_TREE, headers={"User-Agent": "GospelProductionStudio-packs", "Accept": "application/vnd.github+json"})
+        token = os.environ.get("GITHUB_TOKEN")
+        if token:
+            req.add_header("Authorization", "Bearer " + token)
+        with urllib.request.urlopen(req) as r, open(listing, "wb") as f:
+            f.write(r.read())
+    tree = json.load(open(listing))
+    if tree.get("truncated"):
+        log("  warning: the GitHub file list was cut short; some sounds may be missing")
+    return sorted(e["path"] for e in tree.get("tree", []) if e.get("type") == "blob" and e["path"].lower().endswith(".wav"))
+
+def vcsl_fetch(path, cache, local):
+    if local:
+        return os.path.join(local, path)
+    target = os.path.join(cache, "vcsl", path)
+    if os.path.exists(target):
+        return target
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    quoted = urllib.parse.quote(path)
+    for base in (VCSL_RAW, VCSL_LFS):
+        req = urllib.request.Request(base + quoted, headers={"User-Agent": "GospelProductionStudio-packs"})
+        with urllib.request.urlopen(req) as r:
+            data = r.read()
+        if not data.startswith(b"version https://git-lfs"):     # a pointer: the real file is in large file storage
+            with open(target + ".part", "wb") as f:
+                f.write(data)
+            os.replace(target + ".part", target)
+            return target
+    raise SystemExit("Could not download " + path)
+
+def decode(path, rate=22050):
+    """Mono float samples (via ffmpeg)."""
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-ac", "1", "-ar", str(rate), "-f", "f32le", "-"],
+                         check=True, stdout=subprocess.PIPE).stdout
+    import array
+    a = array.array("f"); a.frombytes(raw)
+    return a
+
+def peak_db(path):
+    a = decode(path)
+    peak = max((abs(x) for x in a), default=0.0)
+    return 20.0 * __import__("math").log10(max(peak, 1e-6))
+
+NOTE_RE = re.compile(r"(?<![a-z0-9])([a-g])(#|s|sharp|b|flat)?(-?[0-8])(?![0-9])")
+
+def note_from_name(name):
+    m = NOTE_RE.search(os.path.splitext(name)[0].lower().replace("_", " "))
+    if not m:
+        return None
+    acc = m.group(2) or ""
+    n = NOTE_BASE[m.group(1)] + (1 if acc in ("#", "s", "sharp") else -1 if acc in ("b", "flat") else 0)
+    return n + (int(m.group(3)) + 1) * 12
+
+def pitch_note(path):
+    """Estimate the note of a pitched sample (autocorrelation over 100-1500 Hz)."""
+    import math
+    rate = 22050
+    a = decode(path, rate)
+    start = int(0.03 * rate)
+    seg = a[start:start + 4096]
+    if len(seg) < 2048:
+        return None
+    best, lag_best, corr = 0.0, 0, {}
+    for lag in range(rate // 1500, rate // 100):
+        c = sum(seg[i] * seg[i + lag] for i in range(0, len(seg) - lag, 2))
+        corr[lag] = c
+        if c > best:
+            best, lag_best = c, lag
+    for lag in sorted(corr):
+        if lag - 1 in corr and lag + 1 in corr and corr[lag] >= 0.9 * best and corr[lag] >= corr[lag - 1] and corr[lag] >= corr[lag + 1]:
+            lag_best = lag; break
+    if lag_best == 0:
+        return None
+    return int(round(69 + 12 * math.log2(rate / lag_best / 440.0)))
+
+def layer_regions(files, keyspec, loudest_db=-6.0):
+    """files: [(path, peak_db)] for one sound. Up to 3 velocity layers by loudness, random alternation inside a layer."""
+    files = sorted(files, key=lambda f: f[1])
+    if len(files) > MAX_PER_SOUND:
+        step = (len(files) - 1) / (MAX_PER_SOUND - 1)
+        files = [files[round(i * step)] for i in range(MAX_PER_SOUND)]
+    # Layers only when the recordings really differ in loudness (otherwise they are alternatives)
+    spread = files[-1][1] - files[0][1]
+    n_layers = 1 if spread < 4.0 else min(3, len(files), 2 if spread < 10.0 else 3)
+    edges = [round(i * len(files) / n_layers) for i in range(n_layers + 1)]
+    vel = {1: [(1, 127)], 2: [(1, 79), (80, 127)], 3: [(1, 55), (56, 95), (96, 127)]}[n_layers]
+    gain = max(-18.0, min(18.0, loudest_db - files[-1][1]))
+    regions = []
+    for li in range(n_layers):
+        layer = files[edges[li]:edges[li + 1]]
+        for i, (path, _) in enumerate(layer):
+            r = dict(keyspec)
+            r.update(sample=path, lovel=str(vel[li][0]), hivel=str(vel[li][1]), volume=f"{gain:.1f}")
+            if len(layer) > 1:
+                r["lorand"] = f"{i / len(layer):.3f}"
+                r["hirand"] = f"{(i + 1) / len(layer):.3f}"
+            regions.append(r)
+    return regions
+
+def choose_perc(paths, family, preferred, excluded, needs_preferred):
+    def name_tokens(p): return tokens_of(os.path.basename(p))
+    # The file name decides when it names the instrument (one folder can hold conga, quinto and tumba)
+    fam = [p for p in paths if any(w in name_tokens(p) or w in os.path.basename(p).lower() for w in family)]
+    if not fam:
+        fam = [p for p in paths if any(w in tokens_of(p) or w in p.lower() for w in family)]
+    ok = [p for p in fam if not any(w in name_tokens(p) for w in excluded)]
+    pref = [p for p in ok if any(w in name_tokens(p) for w in preferred)] if preferred else []
+    if pref:
+        return pref
+    return [] if needs_preferred else ok
+
+def build_vcsl_percussion(pack, work, pack_dir, cache, overrides):
+    local = overrides.get(VCSL)
+    paths = vcsl_files(cache, local)
+    log(f"  VCSL: {len(paths)} WAV files")
+    used, sample_map, jobs = set(), {}, []
+
+    def take(path):
+        if path not in sample_map:
+            src = vcsl_fetch(path, cache, local)
+            sample_map[path] = ("samples/" + safe_name(src, used), src)
+            jobs.append((src, os.path.join(pack_dir, sample_map[path][0])))
+        return sample_map[path]
+
+    # --- percussion kit
+    perc_regions, report = [], []
+    for note, what, family, preferred, excluded in PERC_TARGETS:
+        chosen = choose_perc(paths, family, preferred, excluded, note in NEEDS_PREFERRED)
+        if not chosen:
+            report.append(f"    {note:3d} {what:14s} -> built-in (no recording found)")
+            continue
+        files = [(take(p)[1], 0.0) for p in chosen[:40]]
+        files = [(src, peak_db(src)) for src, _ in files]
+        regions = layer_regions(files, dict(lokey=str(note), hikey=str(note), pitch_keycenter=str(note)))
+        for r in regions:
+            r["sample"] = next(v[0] for v in sample_map.values() if v[1] == r["sample"])
+        perc_regions += regions
+        report.append(f"    {note:3d} {what:14s} -> {len(regions)} recordings, e.g. {os.path.basename(chosen[0])}")
+    log("  percussion:\n" + "\n".join(report))
+
+    # --- balafon
+    bala = [p for p in paths if "balafon" in p.lower()]
+    named = [(p, note_from_name(os.path.basename(p))) for p in bala]
+    if sum(1 for _, n in named if n is not None) < max(5, len(bala) // 2):
+        log("  balafon: no note names in the file names, measuring the pitch of each recording")
+        named = [(p, pitch_note(take(p)[1])) for p in bala]
+    by_key = {}
+    for p, n in named:
+        if n is not None and 36 <= n <= 96:
+            by_key.setdefault(n, []).append(p)
+    bala_regions = []
+    keys = sorted(by_key)
+    for i, k in enumerate(keys):
+        lo = 21 if i == 0 else (keys[i - 1] + k) // 2 + 1
+        hi = 108 if i + 1 == len(keys) else (k + keys[i + 1]) // 2
+        files = [(take(p)[1], 0.0) for p in by_key[k][:MAX_PER_SOUND]]
+        files = [(src, peak_db(src)) for src, _ in files]
+        regions = layer_regions(files, dict(lokey=str(lo), hikey=str(hi), pitch_keycenter=str(k)), loudest_db=-8.0)
+        for r in regions:
+            r["sample"] = next(v[0] for v in sample_map.values() if v[1] == r["sample"])
+        bala_regions += regions
+    log(f"  balafon: {len(bala)} recordings, {len(keys)} notes" + (f" ({keys[0]}-{keys[-1]})" if keys else " -> built-in"))
+
+    log(f"  converting {len(jobs)} samples to Ogg Vorbis (quality {pack['quality']})")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as ex:
+        list(ex.map(lambda j: convert(j[0], j[1], pack["quality"]), jobs))
+
+    order = ["sample", "lokey", "hikey", "pitch_keycenter", "lovel", "hivel"]
+    def write(file, title, regions):
+        lines = [f"// {title} - from VCSL (CC0), for Gospel Production Studio", "<control> default_path="]
+        for r in regions:
+            lines.append("<region> " + " ".join(f"{k}={r[k]}" for k in order + sorted(k for k in r if k not in order) if k in r))
+        open(os.path.join(pack_dir, file), "w").write("\n".join(lines) + "\n")
+    write("Percussion.sfz", "African Percussion", perc_regions)
+    write("Balafon.sfz", "Balafon", bala_regions)
+    if not perc_regions:
+        raise SystemExit("No percussion recordings were found in VCSL")
+    return [dict(name="African Percussion", sfz="Percussion.sfz"), dict(name="Balafon", sfz="Balafon.sfz")]
+
 def build_pack(pack, out, work, cache, overrides):
     log(f"\n== {pack['name']} ({pack['id']})")
     pack_dir = os.path.join(work, "packs", pack["id"])
     shutil.rmtree(pack_dir, ignore_errors=True)
     os.makedirs(pack_dir)
     used, sample_map = set(), {}
-    for inst in pack["instruments"]:
-        build_instrument(inst, work, pack_dir, cache, overrides, used, sample_map)
+    if pack.get("builder") == "vcsl_percussion":
+        instruments = build_vcsl_percussion(pack, work, pack_dir, cache, overrides)
+    else:
+        for inst in pack["instruments"]:
+            build_instrument(inst, work, pack_dir, cache, overrides, used, sample_map)
+        instruments = [dict(name=i["name"], sfz=i["file"]) for i in pack["instruments"]]
 
     info = {k: pack[k] for k in ("id", "name", "version", "description", "licence", "credit")}
-    info["instruments"] = [dict(name=i["name"], sfz=i["file"]) for i in pack["instruments"]]
+    info["instruments"] = instruments
     json.dump(info, open(os.path.join(pack_dir, "pack.json"), "w"), indent=1)
     open(os.path.join(pack_dir, "LICENCE.txt"), "w").write(
         f"{pack['name']}\n{pack['credit']}\nLicence: {pack['licence']}\n\n"
