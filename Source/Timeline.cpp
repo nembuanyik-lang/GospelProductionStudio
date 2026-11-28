@@ -6,6 +6,15 @@
 #include "PluginHost.h"
 #include "Mixing.h"
 #include "AutomationLane.h"
+#include "VocalTunePlugin.h"
+#include "Loops.h"
+#include "Timing.h"
+#include "Harmony.h"
+#include "Backing.h"
+#include "ChordDetect.h"
+#include "Stems.h"
+#include "MySounds.h"
+#include "SamplerPlugin.h"
 #include "Timeline.h"
 #include "Dialogs.h"
 
@@ -50,6 +59,7 @@ class ChordLaneHeader final : public juce::Component
 public:
     explicit ChordLaneHeader (TimelineView& o) : owner (o)
     {
+        paletteButton.setComponentID ("timeline.palette");
         paletteButton.setTooltip ("Show or hide the chord palette");
         paletteButton.setWantsKeyboardFocus (false);
         paletteButton.onClick = [this] { if (owner.onTogglePalette) owner.onTogglePalette(); };
@@ -93,6 +103,8 @@ TimelineView::TimelineView (StudioEngine& e)
 
     fitButton.setTooltip ("Show the whole song");
     fitButton.onClick = [this] { zoomToFit(); };
+    bandButton.setTooltip ("Backing band: bass, piano, organ, guitar and drums play your Chord Track in a gospel style");
+    bandButton.onClick = [this] { openBand(); };
 
     snapBox.addItemList ({ "Snap off", "Snap 1/2 beat", "Snap beat", "Snap bar" }, 1);
     snapBox.setSelectedItemIndex (snapMode, juce::dontSendNotification);
@@ -105,7 +117,7 @@ TimelineView::TimelineView (StudioEngine& e)
     zoomSlider.onValueChange = [this] { zoomAround (zoomSlider.getValue() / pxPerBeat, 0.0f); };
 
     for (juce::Component* c : { (juce::Component*) &addTrackButton, (juce::Component*) &undoButton,
-                                (juce::Component*) &redoButton, (juce::Component*) &fitButton,
+                                (juce::Component*) &redoButton, (juce::Component*) &fitButton, (juce::Component*) &bandButton,
                                 (juce::Component*) &snapBox, (juce::Component*) &zoomSlider })
     {
         c->setWantsKeyboardFocus (false);
@@ -390,7 +402,7 @@ void TimelineView::addTrackMenu()
     for (size_t i = 0; i < Instruments::all().size(); ++i)
     {
         const auto& c = Instruments::all()[i];
-        menu.addItem (100 + (int) i, c.name + (c.kind == Instruments::Kind::sampler && ! SoundPacks::isInstalled (c.pack)
+        menu.addItem (100 + (int) i, c.name + (c.kind == Instruments::Kind::sampler && juce::String (c.pack).isNotEmpty() && ! SoundPacks::isInstalled (c.pack)
                                                    ? juce::String ("  (download in Sound Library)") : juce::String()));
     }
     const auto pluginInstruments = PluginHost::getInstruments (engine.getEngine());
@@ -419,7 +431,7 @@ void TimelineView::addTrackMenu()
                 after = Mixing::getSongTracks (*safe->getEdit()).getLast();
 
             safe->beginUndoStep();
-            if (auto* track = safe->engine.addTrack (true, d.name, palette[count % (int) std::size (palette)], after, "none"))
+            if (auto* track = safe->engine.addTrack (true, StudioEngine::uniqueTrackName (*safe->getEdit(), d.name), palette[count % (int) std::size (palette)], after, "none"))
             {
                 if (auto* p = safe->engine.setPluginInstrument (*track, d))
                     PluginHost::showWindow (*p);
@@ -433,8 +445,8 @@ void TimelineView::addTrackMenu()
         const auto instrument = result >= 100;
         const auto* choice = instrument ? &Instruments::all()[(size_t) (result - 100)] : nullptr;
         const auto count = (int) Mixing::getSongTracks (*safe->getEdit()).size();
-        const auto name = choice != nullptr ? (juce::String (choice->group) == "Pianos" ? juce::String ("Piano") : juce::String (choice->group))
-                                            : "Audio " + juce::String (count + 1);
+        const auto name = StudioEngine::uniqueTrackName (*safe->getEdit(), choice != nullptr ? StudioEngine::trackNameFor (choice->id)
+                                                                                           : juce::String ("Audio"));
 
         te::Track* after = safe->selectedTrack;
         if (after == nullptr && count > 0)
@@ -447,9 +459,43 @@ void TimelineView::addTrackMenu()
             if (instrument)
                 safe->engine.setArmedTrack (track);
             safe->selectedTrack = track;
+
+            // My Sounds starts empty: open its window so you can add your sounds
+            if (choice != nullptr && juce::String (choice->id) == "mysounds")
+            {
+                te::Track::Ptr keep (track);
+                auto& eng = safe->engine;
+                juce::MessageManager::callAsync ([&eng, keep]
+                {
+                    if (auto* at = dynamic_cast<te::AudioTrack*> (keep.get()))
+                        InstrumentPanel::open (eng, *at);
+                });
+            }
         }
         safe->rebuildHeaders();
     });
+}
+
+void TimelineView::openBand()
+{
+    auto* ed = getEdit();
+    if (ed == nullptr)
+        return;
+    juce::Component::SafePointer<TimelineView> view (this);
+    auto content = Backing::createPanel (*ed,
+        [view] { return view != nullptr ? view->currentKey() : Theory::Key(); },
+        [view] { return view != nullptr ? view->getBeatsPerBar() : 4.0; },
+        [view] (int, const juce::String& name, juce::Colour colour, const juce::String& instrumentId) -> te::AudioTrack*
+        {
+            return view != nullptr ? view->getEngine().addTrack (true, name, colour, nullptr, instrumentId) : nullptr;
+        },
+        [view]
+        {
+            if (view == nullptr) return;
+            view->refreshAll();
+            if (view->onTracksChanged) view->onTracksChanged();
+        });
+    juce::CallOutBox::launchAsynchronously (std::move (content), bandButton.getScreenBounds(), nullptr);
 }
 
 void TimelineView::addSectionAt (double beat)
@@ -561,6 +607,17 @@ void TimelineView::timerCallback()
     if (ed == nullptr)
         return;
 
+    // Loops follow tempo and key changes: once the tempo and key have stayed the same for a moment
+    {
+        const auto sig = ed->tempoSequence.getTempoAt (te::TimePosition()).getBpm() * 100.0
+                         + ed->pitchSequence.getPitchAt (te::TimePosition()).getPitch() * 1.0e6;
+        const auto now = juce::Time::getMillisecondCounter();
+        if (! juce::exactlyEqual (sig, loopSignature)) { loopSignature = sig; loopSignatureTime = now; }
+        if (++loopCheckTick % 10 == 0 && now - loopSignatureTime > 800 && ! juce::Component::isMouseButtonDownAnywhere())
+            if (Loops::refreshAll (*ed) > 0)
+                refreshAll();
+    }
+
     const auto playhead = getPlayheadBeat();
     const auto playing = ed->getTransport().isPlaying();
 
@@ -664,6 +721,8 @@ void TimelineView::resized()
         addTrackButton.setBounds (t.removeFromLeft (100));
         t.removeFromLeft (8);
         snapBox.setBounds (t.removeFromLeft (140));
+        t.removeFromLeft (8);
+        bandButton.setBounds (t.removeFromLeft (80));
         t.removeFromLeft (16);
         redoButton.setBounds (t.removeFromRight (64));
         t.removeFromRight (6);
@@ -911,8 +970,8 @@ TrackHeader::TrackHeader (TimelineView& o, te::Track& t)
                     for (auto* in : inputs)
                     {
                         bool used = false;
-                        for (auto* t : te::getAudioTracks (*owner.getEdit()))
-                            used = used || (t != audioTrack && eng.getTrackInput (*t) == in);
+                        for (auto* other : te::getAudioTracks (*owner.getEdit()))
+                            used = used || (other != audioTrack && eng.getTrackInput (*other) == in);
                         if (! used) { chosen = in; break; }
                     }
                     eng.setTrackInput (*audioTrack, chosen);
@@ -1038,6 +1097,12 @@ void TrackHeader::paint (juce::Graphics& g)
             description = "Audio  -  no input";
         if (const auto fx = StudioEngine::getEffects (*audioTrack).size(); fx > 0)
             description << "  +" << (int) fx << " FX";
+        if (auto* bus = Mixing::getBusOf (*audioTrack))
+            description = juce::String::fromUTF8 ("\xe2\x86\x92 ") + bus->getName() + "  -  " + description;
+        if (Mixing::getDuckingSource (*audioTrack) != nullptr)
+            description << "  (ducks)";
+        if (audioTrack->isFrozen (te::Track::individualFreeze))
+            description = "FROZEN  -  " + description;
         if (description.contains ("not downloaded") || description.contains ("not installed")) g.setColour (warn);
 
         auto textArea = juce::Rectangle<int> (14, 26, getWidth() - 20, 14);
@@ -1240,6 +1305,67 @@ void TrackHeader::showMenu()
     effects.addSeparator();
     effects.addItem (9, "Plugins...");
     menu.addSubMenu ("Effects" + (trackEffects.empty() ? juce::String() : " (" + juce::String ((int) trackEffects.size()) + ")"), effects);
+
+    // Vocal tuning (Step 16), for sung parts
+    if (! StudioEngine::isInstrumentTrack (*audioTrack))
+    {
+        bool hasTuning = false;
+        for (auto* fx : trackEffects)
+            hasTuning = hasTuning || dynamic_cast<VocalTunePlugin*> (fx) != nullptr;
+        menu.addItem (480, hasTuning ? "Vocal tuning (open)..." : "Vocal tuning (correct the pitch)...");
+
+        // Vocal chain (Step 12): EQ, compressor, de-esser and reverb in one click
+        juce::PopupMenu chains;
+        const auto current = Mixing::currentVocalChain (*audioTrack);
+        for (size_t i = 0; i < Mixing::vocalChains().size(); ++i)
+        {
+            const auto& c = Mixing::vocalChains()[i];
+            chains.addItem (800 + (int) i, juce::String (c.name) + "   (" + c.hint + ")", true, current == c.name);
+        }
+        chains.addSeparator();
+        chains.addItem (799, "Remove the vocal chain", current.isNotEmpty());
+        menu.addSubMenu (current.isNotEmpty() ? "Vocal chain: " + current : juce::String ("Vocal chain (EQ, compressor, de-esser, reverb)"), chains);
+    }
+
+    // Output: straight to the master or into a group bus; ducking under another track (plan Step 14)
+    {
+        auto* ed = owner.getEdit();
+        juce::PopupMenu output, newBus, duck, duckKinds;
+        auto* currentBus = Mixing::getBusOf (*audioTrack);
+        output.addItem (829, "Master (no bus)", true, currentBus == nullptr);
+        const auto buses = Mixing::getGroupBuses (*ed);
+        for (int i = 0; i < buses.size() && i < 20; ++i)
+            output.addItem (830 + i, buses[i]->getName() + "  (" + juce::String (Mixing::getBusMembers (*buses[i]).size()) + " tracks)",
+                            true, buses[i] == currentBus);
+        output.addSeparator();
+        for (size_t i = 0; i < Mixing::busKinds().size(); ++i)
+            newBus.addItem (850 + (int) i, juce::String ("New ") + Mixing::busKinds()[i].name + "   (" + Mixing::busKinds()[i].hint + ")");
+        output.addSubMenu ("Send it into a new bus", newBus);
+        menu.addSubMenu (currentBus != nullptr ? "Output: " + currentBus->getName() : juce::String ("Output: Master"), output);
+
+        auto* source = Mixing::getDuckingSource (*audioTrack);
+        duck.addItem (869, "Off", true, source == nullptr);
+        duck.addSeparator();
+        duck.addSectionHeader ("Get quieter whenever this one plays:");
+        juce::Array<te::AudioTrack*> sources (Mixing::getSongTracks (*ed));
+        sources.addArray (buses);
+        for (int i = 0; i < sources.size() && i < 30; ++i)
+            if (sources[i] != audioTrack)
+                duck.addItem (870 + i, sources[i]->getName(), true, sources[i] == source);
+        const auto kind = Mixing::getDuckingKind (*audioTrack);
+        for (size_t i = 0; i < Mixing::duckKinds().size(); ++i)
+            duckKinds.addItem (900 + (int) i, juce::String (Mixing::duckKinds()[i].name) + "   (" + Mixing::duckKinds()[i].hint + ")",
+                               source != nullptr, kind == (int) i);
+        duck.addSeparator();
+        duck.addSubMenu ("How", duckKinds, source != nullptr);
+        menu.addSubMenu (source != nullptr ? "Ducks under: " + source->getName() : juce::String ("Duck under another track (sidechain)"), duck);
+    }
+
+    // Freeze (Step 14): play from a recording of the track to save computer power
+    if (audioTrack->isFrozen (te::Track::individualFreeze))
+        menu.addItem (471, "Unfreeze (to change notes, sounds or effects)");
+    else
+        menu.addItem (470, "Freeze (saves computer power on heavy tracks)", ! audioTrack->getClips().isEmpty());
     menu.addSeparator();
     juce::PopupMenu inputs, monitoring;
     if (! isInstrument)
@@ -1264,6 +1390,7 @@ void TrackHeader::showMenu()
         menu.addSubMenu ("Input", inputs);
         menu.addSubMenu ("Monitoring", monitoring);
         menu.addItem (7, "Import audio file at the playhead...");
+        menu.addItem (490, "Import a loop (follows the song's tempo)...");
         menu.addItem (8, "Place the song's voice memo at the playhead", owner.getMemoFile && owner.getMemoFile().existsAsFile());
         menu.addSeparator();
     }
@@ -1281,8 +1408,8 @@ void TrackHeader::showMenu()
         if (safe == nullptr || result == 0)
             return;
 
-        auto& owner = safe->owner;
-        auto* ed = owner.getEdit();
+        auto& view = safe->owner;
+        auto* ed = view.getEdit();
         auto* t = safe->audioTrack;
         if (ed == nullptr)
             return;
@@ -1292,108 +1419,181 @@ void TrackHeader::showMenu()
 
         if (result == 1)
         {
-            askForName (&owner, "Rename track", t->getName(), [&owner, t] (const juce::String& n)
+            askForName (&view, "Rename track", t->getName(), [&view, t] (const juce::String& n)
             {
-                owner.beginUndoStep();
+                view.beginUndoStep();
                 t->setName (n);
-                owner.refreshAll();
+                view.refreshAll();
             });
         }
         else if (result == 5)
         {
-            InstrumentPanel::open (owner.getEngine(), *t);
+            InstrumentPanel::open (view.getEngine(), *t);
         }
         else if (result == 9)
         {
-            PluginHost::openManager (owner.getEngine().getEngine());
+            PluginHost::openManager (view.getEngine().getEngine());
         }
         else if (result >= 3000 && result < 3999)
         {
-            const auto list = PluginHost::getInstruments (owner.getEngine().getEngine());
+            const auto list = PluginHost::getInstruments (view.getEngine().getEngine());
             if (result - 3000 < list.size())
             {
-                owner.beginUndoStep();
+                view.beginUndoStep();
                 InstrumentPanel::closeAll();
-                if (auto* p = owner.getEngine().setPluginInstrument (*t, list.getReference (result - 3000)))
+                if (auto* p = view.getEngine().setPluginInstrument (*t, list.getReference (result - 3000)))
                     PluginHost::showWindow (*p);
-                owner.refreshAll();
+                view.refreshAll();
             }
         }
         else if (result >= 4000 && result < 5000)
         {
-            const auto list = PluginHost::getEffects (owner.getEngine().getEngine());
+            const auto list = PluginHost::getEffects (view.getEngine().getEngine());
             if (result - 4000 < list.size())
             {
-                owner.beginUndoStep();
-                if (auto* p = owner.getEngine().addEffect (*t, list.getReference (result - 4000)))
+                view.beginUndoStep();
+                if (auto* p = view.getEngine().addEffect (*t, list.getReference (result - 4000)))
                     PluginHost::showWindow (*p);
-                owner.refreshAll();
+                view.refreshAll();
             }
+        }
+        else if (result >= 829 && result < 860)
+        {
+            view.beginUndoStep();
+            if (result == 829)
+                Mixing::routeToBus (*t, nullptr);
+            else if (result < 850)
+            {
+                const auto buses = Mixing::getGroupBuses (*ed);
+                if (juce::isPositiveAndBelow (result - 830, buses.size()))
+                    Mixing::routeToBus (*t, buses[result - 830]);
+            }
+            else if (auto* bus = Mixing::createGroupBus (*ed, result - 850))
+                Mixing::routeToBus (*t, bus);
+            view.refreshAll();
+        }
+        else if (result >= 869 && result < 910)
+        {
+            view.beginUndoStep();
+            if (result == 869)
+                Mixing::setDucking (*t, nullptr, 0);
+            else if (result < 900)
+            {
+                juce::Array<te::AudioTrack*> sources (Mixing::getSongTracks (*ed));
+                sources.addArray (Mixing::getGroupBuses (*ed));
+                if (juce::isPositiveAndBelow (result - 870, sources.size()))
+                {
+                    // Voices duck the music smoothly; drums duck tightly
+                    auto* src = sources[result - 870];
+                    const auto sourceName = src->getName().toLowerCase();
+                    const int kind = Mixing::getDuckingKind (*t) >= 0 ? Mixing::getDuckingKind (*t)
+                                   : (sourceName.contains ("kick") || sourceName.contains ("drum")) ? 1
+                                   : (sourceName.contains ("voc") || sourceName.contains ("preach") || sourceName.contains ("voice") || sourceName.contains ("speak")) ? 2 : 0;
+                    Mixing::setDucking (*t, src, kind);
+                }
+            }
+            else if (auto* src = Mixing::getDuckingSource (*t))
+                Mixing::setDucking (*t, src, result - 900);
+            view.refreshAll();
+        }
+        else if (result >= 799 && result < 820)
+        {
+            view.beginUndoStep();
+            if (result == 799) Mixing::removeVocalChain (*t);
+            else               Mixing::applyVocalChain (*t, result - 800);
+            view.refreshAll();
+        }
+        else if (result == 480)
+        {
+            te::Plugin* tuning = nullptr;
+            for (auto* fx : StudioEngine::getEffects (*t))
+                if (dynamic_cast<VocalTunePlugin*> (fx) != nullptr)
+                    tuning = fx;
+            if (tuning == nullptr)
+            {
+                view.beginUndoStep();
+                tuning = view.getEngine().addEffect (*t, ed->getPluginCache().createNewPlugin (VocalTunePlugin::xmlTypeName, {}));
+                view.refreshAll();
+            }
+            if (tuning != nullptr)
+                PluginHost::showWindow (*tuning);
+        }
+        else if (result == 470 || result == 471)
+        {
+            ed->getTransport().stop (false, true);
+            const auto r = t->setFrozen (result == 470, te::Track::individualFreeze);
+            if (r.failed())
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Freeze", r.getErrorMessage());
+            view.refreshAll();
         }
         else if (result >= 6000 && result < 6100)
         {
-            const auto index = (size_t) (result - 6000);
-            if (index < Mixing::builtInEffects().size())
+            const auto effectIndex = (size_t) (result - 6000);
+            if (effectIndex < Mixing::builtInEffects().size())
             {
-                owner.beginUndoStep();
-                if (auto* p = owner.getEngine().addEffect (*t, Mixing::createBuiltIn (*ed, Mixing::builtInEffects()[index].type)))
+                view.beginUndoStep();
+                if (auto* p = view.getEngine().addEffect (*t, Mixing::createBuiltIn (*ed, Mixing::builtInEffects()[effectIndex].type)))
                     PluginHost::showWindow (*p);
-                owner.refreshAll();
+                view.refreshAll();
             }
         }
         else if (result >= 5000 && result < 5500)
         {
             const auto fxs = StudioEngine::getEffects (*t);
-            const auto index = (size_t) ((result - 5000) / 10);
+            const auto effectIndex = (size_t) ((result - 5000) / 10);
             const auto action = (result - 5000) % 10;
-            if (index < fxs.size())
+            if (effectIndex < fxs.size())
             {
-                auto* fx = fxs[index];
+                auto* fx = fxs[effectIndex];
                 if (action == 0)
                 {
                     PluginHost::showWindow (*fx);
                 }
                 else
                 {
-                    owner.beginUndoStep();
+                    view.beginUndoStep();
                     if (action == 1)      fx->setEnabled (! fx->isEnabled());
                     else if (action == 2) StudioEngine::moveEffect (*fx, -1);
                     else if (action == 3) StudioEngine::moveEffect (*fx, 1);
                     else if (action == 4) StudioEngine::removeEffect (*fx);
-                    owner.refreshAll();
+                    view.refreshAll();
                 }
             }
         }
         else if (result >= 400 && result < 450)
         {
-            const auto list = owner.getEngine().getAudioInputs();
-            owner.getEngine().setTrackInput (*t, result == 400 ? nullptr : list[(size_t) (result - 401)]);
-            owner.refreshAll();
+            const auto list = view.getEngine().getAudioInputs();
+            view.getEngine().setTrackInput (*t, result == 400 ? nullptr : list[(size_t) (result - 401)]);
+            view.refreshAll();
         }
         else if (result == 450 || result == 451)
         {
-            owner.getEngine().setInputsMono (result == 450);
-            owner.refreshAll();
+            view.getEngine().setInputsMono (result == 450);
+            view.refreshAll();
         }
         else if (result >= 460 && result <= 462)
         {
-            owner.getEngine().setMonitorMode (*t, result == 460 ? te::InputDevice::MonitorMode::automatic
+            view.getEngine().setMonitorMode (*t, result == 460 ? te::InputDevice::MonitorMode::automatic
                                                  : result == 461 ? te::InputDevice::MonitorMode::on
                                                                  : te::InputDevice::MonitorMode::off);
         }
+        else if (result == 490)
+        {
+            view.importAudioTo (*t, true);
+        }
         else if (result == 7)
         {
-            owner.importAudioTo (*t);
+            view.importAudioTo (*t);
         }
         else if (result == 8)
         {
-            owner.beginUndoStep();
-            if (auto* c = owner.getEngine().importAudio (*t, owner.getMemoFile(), owner.getEngine().getPosition().seconds))
+            view.beginUndoStep();
+            if (auto* c = view.getEngine().importAudio (*t, view.getMemoFile(), view.getEngine().getPosition().seconds))
             {
                 c->setName ("Voice memo");
-                owner.selectClip (c);
+                view.selectClip (c);
             }
-            owner.refreshAll();
+            view.refreshAll();
         }
         else if (result == 6)
         {
@@ -1401,32 +1601,32 @@ void TrackHeader::showMenu()
         }
         else if (result >= 200)
         {
-            owner.beginUndoStep();
-            owner.getEngine().setInstrument (*t, Instruments::all()[(size_t) (result - 200)].id);
-            owner.refreshAll();
+            view.beginUndoStep();
+            view.getEngine().setInstrument (*t, Instruments::all()[(size_t) (result - 200)].id);
+            view.refreshAll();
         }
         else if (result >= 100)
         {
-            owner.beginUndoStep();
+            view.beginUndoStep();
             t->setColour (palette[result - 100]);
-            owner.rebuildHeaders();
+            view.rebuildHeaders();
         }
         else if (result == 2 && index > 0)
         {
-            owner.beginUndoStep();
+            view.beginUndoStep();
             ed->moveTrack (t, te::TrackInsertPoint (*tracks[index - 1], true));
-            owner.rebuildHeaders();
+            view.rebuildHeaders();
         }
         else if (result == 3 && index >= 0 && index < tracks.size() - 1)
         {
-            owner.beginUndoStep();
+            view.beginUndoStep();
             ed->moveTrack (t, te::TrackInsertPoint (*tracks[index + 1], false));
-            owner.rebuildHeaders();
+            view.rebuildHeaders();
         }
         else if (result == 4)
         {
-            juce::Component::SafePointer<TimelineView> safeOwner (&owner);
-            Dialogs::confirm (&owner, "Delete track",
+            juce::Component::SafePointer<TimelineView> safeOwner (&view);
+            Dialogs::confirm (&view, "Delete track",
                               "Delete the track \"" + t->getName() + "\" and everything on it?\n"
                               "You can bring it back with Undo.",
                               "Delete", "Cancel",
@@ -1575,9 +1775,33 @@ void TimelineLanes::paint (juce::Graphics& g)
                 g.reduceClipRegion (r.toNearestInt());
                 g.setColour (colour.brighter (0.5f));
                 const auto speed = juce::jmax (0.01, wc->getSpeedRatio());
-                const auto srcStart = te::TimePosition::fromSeconds (pos.getOffset().inSeconds() * speed);
-                thumb->drawChannels (g, area, { srcStart, srcStart + te::TimeDuration::fromSeconds (pos.getLength().inSeconds() * speed) },
-                                     juce::Decibels::decibelsToGain (wc->getGainDB()));
+                const auto loopLen = wc->isLooping() && ! wc->getAutoTempo() ? wc->getLoopRange().getLength().inSeconds() : 0.0;
+                if (loopLen > 0.01)
+                {
+                    // A loop: draw each repeat, with a thin line where it starts again
+                    const auto loopStart = wc->getLoopRange().getStart();
+                    for (double t = 0.0; t < pos.getLength().inSeconds() - 1.0e-4; t += loopLen)
+                    {
+                        const auto x0 = owner.beatToX (owner.timeToBeat (pos.getStart() + te::TimeDuration::fromSeconds (t)));
+                        const auto len = juce::jmin (loopLen, pos.getLength().inSeconds() - t);
+                        const auto x1 = owner.beatToX (owner.timeToBeat (pos.getStart() + te::TimeDuration::fromSeconds (t + len)));
+                        auto sub = area.withX ((int) x0).withRight ((int) x1);
+                        g.setColour (colour.brighter (0.5f));
+                        thumb->drawChannels (g, sub, { loopStart, loopStart + te::TimeDuration::fromSeconds (len) },
+                                             juce::Decibels::decibelsToGain (wc->getGainDB()));
+                        if (t > 0.0)
+                        {
+                            g.setColour (colour.brighter (0.8f).withAlpha (0.7f));
+                            g.drawVerticalLine ((int) x0, r.getY() + 13.0f, r.getBottom() - 2.0f);
+                        }
+                    }
+                }
+                else
+                {
+                    const auto srcStart = te::TimePosition::fromSeconds (pos.getOffset().inSeconds() * speed);
+                    thumb->drawChannels (g, area, { srcStart, srcStart + te::TimeDuration::fromSeconds (pos.getLength().inSeconds() * speed) },
+                                         juce::Decibels::decibelsToGain (wc->getGainDB()));
+                }
                 g.restoreState();
 
                 // Fades: shaded corners with a handle on each
@@ -1612,6 +1836,9 @@ void TimelineLanes::paint (juce::Graphics& g)
 
                 // Gain, pitch and speed at a glance
                 juce::StringArray badges;
+                if (Loops::isFollowing (*wc))
+                    badges.add (juce::String::fromUTF8 ("\xe2\x86\xbb ") + juce::String (juce::roundToInt (Loops::getLoopTempo (*wc))) + " BPM"
+                                + (Loops::isFollowingKey (*wc) ? " key" : ""));
                 if (std::abs (wc->getGainDB()) > 0.05f)        badges.add (juce::String (wc->getGainDB(), 1) + " dB");
                 if (std::abs (wc->getPitchChange()) > 0.005f)  badges.add ((wc->getPitchChange() > 0 ? "+" : "") + juce::String (wc->getPitchChange(), 1) + " st");
                 if (std::abs (wc->getSpeedRatio() - 1.0) > 0.001) badges.add (juce::String (juce::roundToInt (wc->getSpeedRatio() * 100.0)) + "%");
@@ -2008,6 +2235,7 @@ void TimelineLanes::showClipMenu (te::Clip& clip)
     if (dynamic_cast<te::MidiClip*> (&clip) != nullptr)
     {
         menu.addItem (6, "Open in piano roll");
+        menu.addItem (26, "Find the chords (put them on the Chord Track)...");
         menu.addSeparator();
     }
     juce::PopupMenu fadesMenu;
@@ -2027,8 +2255,52 @@ void TimelineLanes::showClipMenu (te::Clip& clip)
         menu.addSubMenu ("Fades (or drag the squares on the clip)", fadesMenu);
         menu.addSeparator();
     }
+    juce::PopupMenu loopMenu, loopKeys;
     if (auto* wc = dynamic_cast<te::WaveAudioClip*> (&clip))
     {
+        if (Loops::isFollowing (*wc))
+        {
+            const auto bpm = Loops::getLoopTempo (*wc);
+            const auto txt = [] (double v) { return juce::String (v, 1).trimCharactersAtEnd ("0").trimCharactersAtEnd ("."); };
+            loopMenu.addItem (700, "Follows the song's tempo (click to stop)", true, true);
+            loopMenu.addSeparator();
+            loopMenu.addSectionHeader ("Its own tempo: " + txt (bpm) + " BPM");
+            loopMenu.addItem (701, "It is twice as fast (" + txt (bpm * 2.0) + " BPM)");
+            loopMenu.addItem (702, "It is half as fast (" + txt (bpm / 2.0) + " BPM)");
+            loopMenu.addItem (703, "Type its tempo...");
+            loopMenu.addSeparator();
+            static const char* keyNames[] = { "C", "C# / Db", "D", "Eb", "E", "F", "F# / Gb", "G", "Ab", "A", "Bb", "B" };
+            const auto root = Loops::getRoot (*wc);
+            loopKeys.addItem (720, "Not known", true, root < 0);
+            for (int k = 0; k < 12; ++k)
+                loopKeys.addItem (721 + k, keyNames[k], true, root == k);
+            loopMenu.addSubMenu ("Its key" + (root >= 0 ? juce::String (": ") + keyNames[root] : juce::String()), loopKeys);
+            loopMenu.addItem (704, "Follow the song's key", root >= 0, Loops::isFollowingKey (*wc));
+            loopMenu.addSeparator();
+            loopMenu.addItem (710, "Repeat: 1 time");
+            loopMenu.addItem (711, "Repeat: 2 times");
+            loopMenu.addItem (712, "Repeat: 4 times");
+            loopMenu.addItem (713, "Repeat: 8 times");
+            loopMenu.addItem (714, "Repeat to the end of the song");
+            menu.addSubMenu ("Loop", loopMenu);
+        }
+        else
+        {
+            menu.addItem (705, "Make it a loop (follow the song's tempo)");
+        }
+        menu.addSeparator();
+
+        menu.addItem (24, juce::String ("Timing correction (line up to the beat)...") + (Timing::isCorrected (*wc) ? "   [on]" : ""));
+        {
+            const auto made = Harmony::findHarmonyTracks (*wc).size();
+            const auto* tr = dynamic_cast<te::AudioTrack*> (wc->getTrack());
+            menu.addItem (26, "Find the chords (put them on the Chord Track)...");
+            menu.addItem (27, juce::String ("Split into stems (voice, drums, bass, other)...")
+                              + (Stems::findStemTracks (*wc).isEmpty() ? juce::String() : juce::String ("   [done]")),
+                          tr == nullptr || ! Harmony::isHarmonyTrack (*tr));
+            menu.addItem (25, juce::String ("Harmony and choir stacks...") + (made > 0 ? "   [" + juce::String (made) + " parts]" : juce::String()),
+                          tr == nullptr || ! Harmony::isHarmonyTrack (*tr));
+        }
         if (Comp::recordedTakes (*wc).size() > 1)
             menu.addItem (23, "Comp takes (choose the best of each part)...");
         const auto n = Takes::count (*wc);
@@ -2088,10 +2360,60 @@ void TimelineLanes::showClipMenu (te::Clip& clip)
                 safe->refreshAll();
             }
         }
+        else if (result == 24)
+        {
+            if (auto* wc = dynamic_cast<te::WaveAudioClip*> (clipPtr.get()))
+            {
+                juce::Component::SafePointer<TimelineView> view (safe.getComponent());
+                auto content = Timing::createPanel (*wc, [view] { if (view != nullptr) view->refreshAll(); });
+                const auto r = safe->lanesView.getScreenBounds().withSizeKeepingCentre (10, 10);
+                juce::CallOutBox::launchAsynchronously (std::move (content), r, nullptr);
+            }
+        }
+        else if (result == 26 || result == 27)
+        {
+            juce::Component::SafePointer<TimelineView> view (safe.getComponent());
+            auto refresh = [view]
+            {
+                if (view == nullptr) return;
+                view->refreshAll();
+                if (view->onTracksChanged) view->onTracksChanged();
+                if (view->onChordsChanged) view->onChordsChanged();
+            };
+            std::unique_ptr<juce::Component> content;
+            if (result == 26)
+                content = ChordDetect::createPanel (*clipPtr, [view] { return view != nullptr ? view->currentKey() : Theory::Key(); },
+                                                    [view] { return view != nullptr ? view->getBeatsPerBar() : 4.0; }, refresh);
+            else if (auto* wc = dynamic_cast<te::WaveAudioClip*> (clipPtr.get()))
+                content = Stems::createPanel (*wc, refresh);
+            if (content != nullptr)
+                juce::CallOutBox::launchAsynchronously (std::move (content), safe->lanesView.getScreenBounds().withSizeKeepingCentre (10, 10), nullptr);
+        }
+        else if (result == 25)
+        {
+            if (auto* wc = dynamic_cast<te::WaveAudioClip*> (clipPtr.get()))
+            {
+                juce::Component::SafePointer<TimelineView> view (safe.getComponent());
+                auto content = Harmony::createPanel (*wc, [view] { return view != nullptr ? view->currentKey() : Theory::Key(); },
+                                                     [view]
+                                                     {
+                                                         if (view == nullptr) return;
+                                                         view->refreshAll();
+                                                         if (view->onTracksChanged) view->onTracksChanged();
+                                                     });
+                const auto r = safe->lanesView.getScreenBounds().withSizeKeepingCentre (10, 10);
+                juce::CallOutBox::launchAsynchronously (std::move (content), r, nullptr);
+            }
+        }
         else if (result == 23)
         {
             if (safe->onOpenComp)
                 safe->onOpenComp (dynamic_cast<te::WaveAudioClip*> (clipPtr.get()));
+        }
+        else if (result >= 700 && result < 740)
+        {
+            if (auto* wc = dynamic_cast<te::WaveAudioClip*> (clipPtr.get()))
+                safe->loopMenuChosen (*wc, result);
         }
         else if (result >= 600 && result < 620)
         {
@@ -2537,23 +2859,227 @@ void TimelineView::insertGroove (te::AudioTrack& track, const Grooves::Groove& g
 }
 
 //==============================================================================
-void TimelineView::importAudioTo (te::AudioTrack& track)
+void TimelineView::loopMenuChosen (te::WaveAudioClip& wc, int result)
 {
-    chooser = std::make_unique<juce::FileChooser> ("Import an audio file", juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+    auto* ed = getEdit();
+    if (ed == nullptr)
+        return;
+    const auto bpb = juce::jmax (1, (int) std::round (getBeatsPerBar()));
+    te::Clip::Ptr keep (&wc);
+
+    if (result == 700)
+    {
+        beginUndoStep();
+        Loops::stopFollowing (wc);
+    }
+    else if (result == 701 || result == 702)
+    {
+        beginUndoStep();
+        Loops::setLoopTempo (wc, Loops::getLoopTempo (wc) * (result == 701 ? 2.0 : 0.5));
+    }
+    else if (result == 703 || result == 705)
+    {
+        if (result == 705)
+        {
+            const auto songBpm = ed->tempoSequence.getTempoAt (wc.getPosition().getStart()).getBpm();
+            const auto g = Loops::guess (ed->engine, wc.getOriginalFile(), songBpm, bpb, true);
+            if (g.valid())
+            {
+                beginUndoStep();
+                Loops::follow (wc, g, 1);
+                refreshAll();
+                return;
+            }
+        }
+        juce::Component::SafePointer<TimelineView> safe (this);
+        const auto current = Loops::getLoopTempo (wc);
+        askForName (this, "Tempo of this loop (BPM)", current > 0.0 ? juce::String (current, 1) : juce::String ("90"),
+                    [safe, keep, bpb] (const juce::String& text)
+        {
+            auto* w = dynamic_cast<te::WaveAudioClip*> (keep.get());
+            const auto bpm = text.retainCharacters ("0123456789.").getDoubleValue();
+            if (safe == nullptr || w == nullptr || bpm < 30.0 || bpm > 300.0)
+                return;
+            safe->beginUndoStep();
+            if (Loops::isFollowing (*w))
+                Loops::setLoopTempo (*w, bpm);
+            else
+            {
+                Loops::Guess g;
+                g.bpm = bpm;
+                g.beats = bpm * te::AudioFile (w->edit.engine, w->getOriginalFile()).getLength() / 60.0;
+                g.root = Loops::rootFromName (w->getOriginalFile().getFileNameWithoutExtension());
+                Loops::follow (*w, g, 1);
+            }
+            juce::ignoreUnused (bpb);
+            safe->refreshAll();
+        });
+        return;
+    }
+    else if (result == 704)
+    {
+        beginUndoStep();
+        Loops::setFollowKey (wc, ! Loops::isFollowingKey (wc));
+    }
+    else if (result >= 720 && result <= 732)
+    {
+        beginUndoStep();
+        Loops::setRoot (wc, result == 720 ? -1 : result - 721);
+    }
+    else if (result >= 710 && result <= 714)
+    {
+        const double loopBeats = Loops::getLoopTempo (wc) > 0.0
+                                   ? wc.getLoopRange().getLength().inSeconds() * ed->tempoSequence.getTempoAt (wc.getPosition().getStart()).getBpm() / 60.0
+                                   : 0.0;
+        if (loopBeats <= 0.0)
+            return;
+        double beats = loopBeats;
+        if (result == 711) beats *= 2.0;
+        if (result == 712) beats *= 4.0;
+        if (result == 713) beats *= 8.0;
+        if (result == 714)
+        {
+            // To the end of the last section (or of the last clip)
+            double endBeat = timeToBeat (wc.getPosition().getEnd());
+            if (auto* at = ed->getArrangerTrack())
+                for (auto* c : at->getClips())
+                    endBeat = juce::jmax (endBeat, timeToBeat (c->getPosition().getEnd()));
+            const auto start = timeToBeat (wc.getPosition().getStart());
+            beats = juce::jmax (loopBeats, std::floor ((endBeat - start) / loopBeats + 1.0e-6) * loopBeats);
+        }
+        beginUndoStep();
+        const auto start = timeToBeat (wc.getPosition().getStart());
+        wc.setEnd (beatToTime (start + beats), false);
+    }
+    refreshAll();
+}
+
+void TimelineView::importAudioTo (te::AudioTrack& track, bool asLoop)
+{
+    chooser = std::make_unique<juce::FileChooser> (asLoop ? "Import a loop" : "Import an audio file",
+                                                   juce::File::getSpecialLocation (juce::File::userMusicDirectory),
                                                    "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
     juce::Component::SafePointer<TimelineView> safe (this);
-    te::AudioTrack* t = &track;
-    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe, t] (const juce::FileChooser& fc)
+    te::AudioTrack::Ptr t (&track);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe, t, asLoop] (const juce::FileChooser& fc)
     {
         if (safe == nullptr || fc.getResult() == juce::File())
             return;
-        safe->beginUndoStep();
-        if (auto* c = safe->engine.importAudio (*t, fc.getResult(), safe->beatToTime (safe->snap (safe->getPlayheadBeat())).inSeconds()))
-            safe->selectClip (c);
-        else
-            Dialogs::message (safe.getComponent(), "Import audio", "This file could not be read as audio.");
-        safe->refreshAll();
+        safe->importFileAt (*t, fc.getResult(), safe->snap (safe->getPlayheadBeat()), asLoop);
     });
+}
+
+te::Clip* TimelineView::importFileAt (te::AudioTrack& track, const juce::File& file, double beat, bool asLoop)
+{
+    auto* ed = getEdit();
+    if (ed == nullptr)
+        return nullptr;
+
+    beginUndoStep();
+    auto* c = engine.importAudio (track, file, beatToTime (juce::jmax (0.0, beat)).inSeconds());
+    if (c == nullptr)
+    {
+        Dialogs::message (this, "Import audio", file.getFileName() + " could not be read as audio.");
+        return nullptr;
+    }
+    selectClip (c);
+
+    // A loop follows the song's tempo. Without being told, only when the file or its name says its tempo.
+    if (auto* wc = dynamic_cast<te::WaveAudioClip*> (c))
+    {
+        const auto bpb = juce::jmax (1, (int) std::round (getBeatsPerBar()));
+        const auto songBpm = ed->tempoSequence.getTempoAt (c->getPosition().getStart()).getBpm();
+        const auto g = Loops::guess (ed->engine, file, songBpm, bpb, asLoop);
+        if (g.valid())
+        {
+            // Fill at least 4 bars when asked for a loop; otherwise play it once
+            const auto repeats = asLoop ? juce::jmax (1, (int) std::ceil (4.0 * bpb / g.beats - 1.0e-6)) : 1;
+            if (Loops::follow (*wc, g, repeats) && ! asLoop)
+                lastLoopMessage = file.getFileNameWithoutExtension() + ": a loop at " + juce::String (g.bpm, 1).trimCharactersAtEnd ("0").trimCharactersAtEnd (".")
+                                  + " BPM (" + g.how + "). It now follows the song's tempo. Right-click it > Loop to change.";
+        }
+        else if (asLoop)
+        {
+            Dialogs::message (this, "Import a loop",
+                              "The tempo of this audio could not be worked out, so it plays at its own speed. "
+                              "Right-click it > Loop > \"Make it a loop\" and type its tempo.");
+        }
+    }
+    refreshAll();
+    return c;
+}
+
+bool TimelineView::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (auto& f : files)
+        if (MySounds::isAudioFile (juce::File (f)))
+            return getEdit() != nullptr;
+    return false;
+}
+
+void TimelineView::fileDragMove (const juce::StringArray&, int x, int y)
+{
+    dropPoint = lanesView.getLocalPoint (this, juce::Point<int> (x, y));
+    lanesView.repaint();
+}
+
+void TimelineView::fileDragExit (const juce::StringArray&)
+{
+    dropPoint = { -1, -1 };
+    lanesView.repaint();
+}
+
+void TimelineView::filesDropped (const juce::StringArray& files, int x, int y)
+{
+    dropPoint = { -1, -1 };
+    auto* ed = getEdit();
+    if (ed == nullptr)
+        return;
+
+    const auto p = lanesView.getLocalPoint (this, juce::Point<int> (x, y));
+    const auto lane = laneAtY (p.y + scrollY);
+    auto* track = dynamic_cast<te::AudioTrack*> (getLane (lane));
+    auto beat = snap (juce::jmax (0.0, xToBeat ((float) p.x)));
+
+    // Onto a My Sounds track: the files become its sounds
+    if (track != nullptr)
+        if (auto* s = dynamic_cast<SamplerPlugin*> (StudioEngine::getInstrumentPlugin (*track)); s != nullptr && s->isMySounds())
+        {
+            s->getUndoManager()->beginNewTransaction ("Add sounds");
+            for (auto& f : files)
+                if (MySounds::isAudioFile (juce::File (f)) && MySounds::lengthSeconds (juce::File (f)) <= 60.0)
+                    MySounds::add (s->state, engine.copyIntoSong (juce::File (f), "Sounds"), s->getUndoManager());
+            InstrumentPanel::open (engine, *track);
+            return;
+        }
+
+    // Onto an instrument track or empty space: a new audio track
+    if (track == nullptr || StudioEngine::isInstrumentTrack (*track))
+    {
+        const auto count = (int) Mixing::getSongTracks (*ed).size();
+        beginUndoStep();
+        track = dynamic_cast<te::AudioTrack*> (engine.addTrack (false, juce::File (files[0]).getFileNameWithoutExtension(),
+                                                                palette[count % (int) std::size (palette)],
+                                                                count > 0 ? Mixing::getSongTracks (*ed).getLast() : nullptr, "grand"));
+        if (track == nullptr)
+            return;
+    }
+
+    // Several files: one after the other
+    for (auto& f : files)
+    {
+        const juce::File file (f);
+        if (! MySounds::isAudioFile (file))
+            continue;
+        if (auto* c = importFileAt (*track, file, beat, false))
+            beat = timeToBeat (c->getPosition().getEnd());
+    }
+    rebuildHeaders();
+    if (lastLoopMessage.isNotEmpty())
+    {
+        Dialogs::message (this, "Loop", lastLoopMessage);
+        lastLoopMessage = {};
+    }
 }
 
 //==============================================================================

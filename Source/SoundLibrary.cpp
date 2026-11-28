@@ -125,6 +125,22 @@ SoundLibrary::Status SoundLibrary::getStatus (const Pack& p) const
 void SoundLibrary::setStatus (const juce::String& id, State state, float progress, const juce::String& message)
 {
     status[id] = { state, progress, message };
+
+    // Listed as busy while downloading or installing, so closing the app asks first (Step 24)
+    if (state == State::downloading || state == State::installing)
+    {
+        if (busyTokens.find (id) == busyTokens.end())
+        {
+            auto flag = alive;
+            busyTokens[id] = BackgroundWork::busy ("Downloading a sound pack", [this, flag, id]
+            {
+                if (flag->load()) cancel (id);
+            });
+        }
+    }
+    else
+        busyTokens.erase (id);
+
     sendChangeMessage();
 }
 
@@ -513,11 +529,24 @@ private:
 };
 
 //==============================================================================
+std::unique_ptr<juce::Component> SoundLibrary::createComponent()
+{
+    if (auto* lib = getInstance())
+        return std::make_unique<SoundLibraryComponent> (*lib);
+    return {};
+}
+
 void SoundLibrary::openWindow()
 {
     auto* lib = getInstance();
     if (lib == nullptr)
         return;
+
+    if (onOpenRequest != nullptr)
+    {
+        onOpenRequest();
+        return;
+    }
 
     if (lib->window != nullptr)
     {

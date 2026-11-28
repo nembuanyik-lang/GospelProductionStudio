@@ -9,9 +9,16 @@ namespace Instruments
             { "grandFull",  "Grand Piano (full detail)", "Pianos", Kind::sampler,   "piano-grand-full", "" },
             { "upright",    "Upright Piano",           "Pianos",  Kind::sampler,    "piano-upright",    "" },
             { "organ",      "Gospel Organ",            "Organ",   Kind::organ,      "",                 "" },
+            // Step 30: recorded guitars from the sound packs; the built-in guitar plays until they are downloaded
+            { "guitar",     "Clean Electric Guitar",   "Guitar",  Kind::sampler,    "guitar-electric",  "Clean.sfz" },
+            { "guitarNylon", "Nylon Guitar",           "Guitar",  Kind::sampler,    "guitar-nylon",     "Nylon.sfz" },
             { "bassFinger", "Electric Bass (finger)",  "Bass",    Kind::sampler,    "bass-electric",    "Finger.sfz" },
             { "bassPick",   "Electric Bass (pick)",    "Bass",    Kind::sampler,    "bass-electric",    "Pick.sfz" },
             { "drums",      "Drum Kit",                "Drums",   Kind::sampler,    "drums-acoustic",   "" },
+            // Step 31: recorded where the African percussion pack has the sound, built-in otherwise
+            { "percussion", "African Percussion (congas, djembe, talking drum, shakers, bells)", "Drums", Kind::sampler, "percussion-african", "Percussion.sfz" },
+            { "balafon",    "Balafon",                 "Percussion", Kind::sampler, "percussion-african", "Balafon.sfz" },
+            { "mysounds",   "My Sounds (your own samples)", "Your sounds", Kind::sampler, "",            "" },
             { "studioKeys", "Studio Keys (simple)",    "Simple",  Kind::studioKeys, "",                 "" },
         };
         return list;

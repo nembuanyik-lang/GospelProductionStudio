@@ -779,6 +779,18 @@ PianoRoll::PianoRoll (StudioEngine& e, TimelineView& t)
         if (onSplitChanged) onSplitChanged();
     };
 
+    drumGridButton.setTooltip ("Edit these drums as boxes in the drum grid");
+    drumGridButton.setWantsKeyboardFocus (false);
+    drumGridButton.onClick = [this]
+    {
+        if (clip != nullptr && onDrumGrid)
+        {
+            te::MidiClip::Ptr c = clip;
+            onDrumGrid (c.get());
+        }
+    };
+    addChildComponent (drumGridButton);
+
     closeButton.setTooltip ("Close the piano roll (Esc)");
     closeButton.onClick = [this] { if (onClose) onClose(); };
 
@@ -810,6 +822,12 @@ PianoRoll::~PianoRoll()
 }
 
 //==============================================================================
+void PianoRoll::setDrumGridAvailable (bool b)
+{
+    drumGridButton.setVisible (b);
+    resized();
+}
+
 void PianoRoll::setClip (te::MidiClip* c)
 {
     clip = c;
@@ -892,10 +910,10 @@ double PianoRoll::floorToGrid (double beat) const
 double PianoRoll::newNoteLength() const
 {
     const auto q = lengthChoices[juce::jlimit (0, (int) std::size (lengthChoices) - 1, lengthBox.getSelectedItemIndex())].quarters;
-    const auto grid = gridBeats() > 0.0 ? gridBeats() : 1.0;
+    const auto gridLength = gridBeats() > 0.0 ? gridBeats() : 1.0;
 
-    if (q < -1.0) return lastLength > 0.0 ? lastLength : grid;
-    if (q == 0.0) return grid;
+    if (q < -1.0) return lastLength > 0.0 ? lastLength : gridLength;
+    if (juce::exactlyEqual (q, 0.0)) return gridLength;
     return q / quartersPerBeat (getEdit());
 }
 
@@ -1015,6 +1033,8 @@ const ChordTrack::Event* PianoRoll::chordForNote (const te::MidiNote& n) const
 
 PianoRoll::Fit PianoRoll::fitOf (const te::MidiNote& n) const
 {
+    if (drumGridButton.isVisible())
+        return Fit::noChord;     // drums have no notes to check against chords
     const auto* ev = chordForNote (n);
     if (ev == nullptr)
         return Fit::noChord;
@@ -1504,7 +1524,7 @@ void PianoRoll::timerCallback()
             updateScrollbars();
         }
     }
-    if (beat != lastFollowBeat || engine.isPlaying())
+    if (! juce::exactlyEqual (beat, lastFollowBeat) || engine.isPlaying())
     {
         lastFollowBeat = beat;
         ruler.repaint();
@@ -1551,6 +1571,11 @@ void PianoRoll::resized()
     t.removeFromRight (6);
     splitButton.setBounds (t.removeFromRight (56));
     t.removeFromRight (12);
+    if (drumGridButton.isVisible())
+    {
+        drumGridButton.setBounds (t.removeFromRight (80));
+        t.removeFromRight (8);
+    }
 
     selectButton.setBounds (t.removeFromLeft (64));
     drawButton.setBounds (t.removeFromLeft (58));

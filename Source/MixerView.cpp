@@ -1,6 +1,8 @@
 #include "MixerView.h"
 #include "Mixing.h"
 #include "Automation.h"
+#include "MasterPlugin.h"
+#include "AnalyserPlugin.h"
 #include "PluginHost.h"
 #include "InstrumentPanel.h"
 #include "StudioLookAndFeel.h"
@@ -9,7 +11,7 @@ namespace
 {
     using namespace StudioColours;
 
-    constexpr int stripWidth = 100;
+    constexpr int stripWidth = 100, narrowStripWidth = 86;   // narrower strips so more fit on a 1366 screen
 
     juce::String dbText (float db)
     {
@@ -336,6 +338,62 @@ namespace
 }
 
 //==============================================================================
+//  Where a track goes: the master or a group bus (plan Step 14)
+//==============================================================================
+namespace
+{
+    void showOutputMenu (te::AudioTrack& track, juce::Component* target, std::function<void()> changed)
+    {
+        auto& edit = track.edit;
+        juce::PopupMenu menu, newBus;
+        auto* current = Mixing::getBusOf (track);
+        menu.addSectionHeader ("Where " + track.getName() + " goes");
+        menu.addItem (1, "Master (no bus)", true, current == nullptr);
+        const auto buses = Mixing::getGroupBuses (edit);
+        for (int i = 0; i < buses.size(); ++i)
+            menu.addItem (10 + i, buses[i]->getName(), true, buses[i] == current);
+        for (size_t i = 0; i < Mixing::busKinds().size(); ++i)
+            newBus.addItem (100 + (int) i, juce::String ("New ") + Mixing::busKinds()[i].name);
+        menu.addSeparator();
+        menu.addSubMenu ("Into a new bus", newBus);
+
+        te::Track::Ptr keep (&track);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (target), [keep, changed] (int r)
+        {
+            auto* t = dynamic_cast<te::AudioTrack*> (keep.get());
+            if (t == nullptr || r == 0) return;
+            t->edit.getUndoManager().beginNewTransaction ("Output");
+            if (r == 1) Mixing::routeToBus (*t, nullptr);
+            else if (r >= 100) { if (auto* b = Mixing::createGroupBus (t->edit, r - 100)) Mixing::routeToBus (*t, b); }
+            else
+            {
+                const auto list = Mixing::getGroupBuses (t->edit);
+                if (juce::isPositiveAndBelow (r - 10, list.size())) Mixing::routeToBus (*t, list[r - 10]);
+            }
+            if (changed) changed();
+        });
+    }
+
+    void askForBusName (juce::Component* parent, te::AudioTrack& bus)
+    {
+        auto* window = new juce::AlertWindow ("Rename the bus", {}, juce::MessageBoxIconType::NoIcon, parent);
+        window->addTextEditor ("name", bus.getName());
+        window->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        te::Track::Ptr keep (&bus);
+        window->enterModalState (true, juce::ModalCallbackFunction::create ([window, keep] (int result)
+        {
+            const auto text = window->getTextEditorContents ("name").trim();
+            if (result == 1 && text.isNotEmpty() && keep != nullptr)
+            {
+                keep->edit.getUndoManager().beginNewTransaction ("Rename bus");
+                keep->setName (text);
+            }
+        }), true);
+    }
+}
+
+//==============================================================================
 //  One channel strip
 //==============================================================================
 class MixerView::Strip final : public juce::Component
@@ -417,6 +475,19 @@ public:
         else
             meter.attach (ensureMasterMeter());
 
+        // Mastering (Step 15), where the master has no sends
+        if (kind == Kind::master)
+        {
+            masteringButton.setTooltip ("Mastering: the last polish and loudness for the whole song");
+            masteringButton.setWantsKeyboardFocus (false);
+            masteringButton.onClick = [] { if (MasterPlugin::onOpenRequest) MasterPlugin::onOpenRequest(); };
+            addAndMakeVisible (masteringButton);
+            analyserButton.setTooltip ("Analyser: spectrum, stereo, loudness, and comparison with a reference song");
+            analyserButton.setWantsKeyboardFocus (false);
+            analyserButton.onClick = [] { if (AnalyserPlugin::onOpenRequest) AnalyserPlugin::onOpenRequest(); };
+            addAndMakeVisible (analyserButton);
+        }
+
         // Mute and solo
         if (track != nullptr)
         {
@@ -464,8 +535,17 @@ public:
             soloButton.setColour (juce::TextButton::textColourOffId, solo ? header : text);
         }
 
+        if (kind == Kind::master)
+        {
+            const auto on = MasterPlugin::isActive (edit);
+            masteringButton.setColour (juce::TextButton::buttonColourId, on ? gold : card.brighter (0.08f));
+            masteringButton.setColour (juce::TextButton::textColourOffId, on ? header : text);
+        }
+
         const auto sub = subtitle();
         if (sub != lastSubtitle) { lastSubtitle = sub; repaint(); }
+        const auto out = outputText();
+        if (out != lastOutput) { lastOutput = out; repaint(); }
 
         inserts.refreshIfChanged();
         meter.update();
@@ -489,6 +569,12 @@ public:
         g.setColour (textDim);
         g.setFont (studioFont (10.5f));
         g.drawText (lastSubtitle, subArea, juce::Justification::centred, true);
+        if (canRoute())
+        {
+            auto* bus = Mixing::getBusOf (*track);
+            g.setColour (bus != nullptr ? bus->getColour().brighter (0.3f) : textDim.withAlpha (0.7f));
+            g.drawText (lastOutput, outArea, juce::Justification::centred, true);
+        }
 
         g.setFont (studioFont (10.5f));
         if (kind == Kind::track)
@@ -515,12 +601,19 @@ public:
         r.removeFromTop (8);
         nameArea = r.removeFromTop (18);
         subArea = r.removeFromTop (14);
-        r.removeFromTop (6);
+        outArea = canRoute() ? r.removeFromTop (14) : juce::Rectangle<int>();
+        r.removeFromTop (canRoute() ? 2 : 6);
         inserts.maxRows = getHeight() < 500 ? 3 : 5;          // small screens: more room for the fader
         inserts.setBounds (r.removeFromTop (InsertList::rowHeight * (inserts.maxRows + 1)));
         r.removeFromTop (6);
 
         auto sendRow = r.removeFromTop (58);
+        if (kind == Kind::master)
+        {
+            masteringButton.setBounds (sendRow.removeFromTop (28));
+            sendRow.removeFromTop (4);
+            analyserButton.setBounds (sendRow.removeFromTop (24));
+        }
         if (kind == Kind::track)
         {
             for (int bus = 0; bus < Mixing::numBuses; ++bus)
@@ -554,6 +647,35 @@ public:
 
     void mouseDown (const juce::MouseEvent& e) override
     {
+        // Clicking the output chooses where the track goes
+        if (canRoute() && outArea.contains (e.getPosition()))
+        {
+            showOutputMenu (*track, this, [] {});
+            return;
+        }
+
+        // A bus: rename or remove it
+        if (kind == Kind::track && Mixing::isGroupBus (*track) && (e.mods.isPopupMenu() || nameArea.contains (e.getPosition())))
+        {
+            juce::PopupMenu m;
+            m.addItem (1, "Rename...");
+            m.addItem (2, "Remove the bus (its tracks go straight to the master)");
+            te::Track::Ptr keep (track);
+            juce::Component::SafePointer<Strip> safe (this);
+            m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [keep, safe] (int r)
+            {
+                auto* bus = dynamic_cast<te::AudioTrack*> (keep.get());
+                if (bus == nullptr || r == 0) return;
+                if (r == 1) askForBusName (safe.getComponent(), *bus);
+                if (r == 2)
+                {
+                    bus->edit.getUndoManager().beginNewTransaction ("Remove bus");
+                    Mixing::deleteGroupBus (*bus);
+                }
+            });
+            return;
+        }
+
         // Clicking the instrument name opens it
         if (kind == Kind::track && subArea.contains (e.getPosition()) && StudioEngine::isInstrumentTrack (*track))
             InstrumentPanel::open (engine, *track);
@@ -571,6 +693,11 @@ private:
     {
         if (kind == Kind::master) return "Whole song";
         if (kind == Kind::returnTrack) return "Shared";
+        if (Mixing::isGroupBus (*track))
+        {
+            const auto n = Mixing::getBusMembers (*track).size();
+            return "Bus  -  " + juce::String (n) + (n == 1 ? " track" : " tracks");
+        }
         if (StudioEngine::isInstrumentTrack (*track))
             return StudioEngine::describeInstrument (*track);
         return "Audio";
@@ -618,9 +745,18 @@ private:
     InsertList inserts;
     juce::Slider sends[Mixing::numBuses], pan, fader;
     Meter meter;
-    juce::TextButton muteButton { "M" }, soloButton { "S" };
-    juce::Rectangle<int> nameArea, subArea, sendLabels[Mixing::numBuses], panLabel, dbArea;
-    juce::String lastSubtitle;
+    juce::TextButton muteButton { "M" }, soloButton { "S" }, masteringButton { "Mastering" }, analyserButton { "Analyser" };
+    juce::Rectangle<int> nameArea, subArea, outArea, sendLabels[Mixing::numBuses], panLabel, dbArea;
+    juce::String lastSubtitle, lastOutput;
+
+    bool canRoute() const   { return kind == Kind::track && ! Mixing::isGroupBus (*track); }
+
+    juce::String outputText() const
+    {
+        if (! canRoute()) return {};
+        auto* bus = Mixing::getBusOf (*track);
+        return juce::String::fromUTF8 ("\xe2\x86\x92 ") + (bus != nullptr ? bus->getName() : juce::String ("Master"));
+    }
 };
 
 //==============================================================================
@@ -636,6 +772,28 @@ MixerView::MixerView (StudioEngine& e) : engine (e)
     hint.setFont (studioFont (12.0f));
     hint.setColour (juce::Label::textColourId, textDim);
     addAndMakeVisible (hint);
+
+    addBusButton.setTooltip ("A bus gathers several tracks (all the choir voices) under one fader with shared effects");
+    addBusButton.setWantsKeyboardFocus (false);
+    addBusButton.onClick = [this]
+    {
+        juce::PopupMenu m;
+        for (size_t i = 0; i < Mixing::busKinds().size(); ++i)
+            m.addItem ((int) i + 1, juce::String (Mixing::busKinds()[i].name) + "   (" + Mixing::busKinds()[i].hint + ")");
+        juce::Component::SafePointer<MixerView> safe (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (addBusButton), [safe] (int r)
+        {
+            if (safe == nullptr || r == 0) return;
+            if (auto* ed = safe->engine.getEdit())
+            {
+                ed->getUndoManager().beginNewTransaction ("New bus");
+                Mixing::createGroupBus (*ed, r - 1);
+                safe->hint.setText ("New bus added. Click the arrow line under a track's name (\"" + juce::String::fromUTF8 ("\xe2\x86\x92") + " Master\") to send it into the bus.",
+                                    juce::dontSendNotification);
+            }
+        });
+    };
+    addAndMakeVisible (addBusButton);
 }
 
 MixerView::~MixerView()
@@ -675,6 +833,8 @@ void MixerView::rebuild()
 
     for (auto* t : Mixing::getSongTracks (*ed))
         content.addAndMakeVisible (strips.add (new Strip (engine, *ed, t)));
+    for (auto* b : Mixing::getGroupBuses (*ed))
+        content.addAndMakeVisible (strips.add (new Strip (engine, *ed, b)));
     for (int bus = 0; bus < Mixing::numBuses; ++bus)
         if (auto* r = Mixing::findReturn (*ed, bus))
             content.addAndMakeVisible (strips.add (new Strip (engine, *ed, r)));
@@ -718,7 +878,9 @@ void MixerView::paint (juce::Graphics& g)
 void MixerView::resized()
 {
     auto r = getLocalBounds().reduced (6);
-    hint.setBounds (r.removeFromTop (getHeight() > 420 ? 30 : 0));
+    auto top = r.removeFromTop (30);
+    addBusButton.setBounds (top.removeFromRight (90).reduced (0, 3));
+    hint.setBounds (top);
     hint.setVisible (getHeight() > 420);
 
     if (master != nullptr)
@@ -728,17 +890,31 @@ void MixerView::resized()
     }
     viewport.setBounds (r);
 
-    const auto h = r.getHeight() - (strips.size() * stripWidth > r.getWidth() ? viewport.getScrollBarThickness() : 0);
-    content.setSize (juce::jmax (r.getWidth(), strips.size() * stripWidth), h);
+    // Gaps before the group buses and the shared reverb and delay
+    int gaps = 0;
+    {
+        int group = 0;
+        for (auto* s : strips)
+        {
+            const int g = s->getTrack() == nullptr ? 0 : Mixing::isReturnTrack (*s->getTrack()) ? 2 : Mixing::isGroupBus (*s->getTrack()) ? 1 : 0;
+            if (g != group) { gaps += 10; group = g; }
+        }
+    }
+    // Full width when everything fits; otherwise narrower strips, and scroll only if still needed
+    const auto n = juce::jmax (1, strips.size());
+    const auto w = juce::jlimit (narrowStripWidth, stripWidth, (r.getWidth() - gaps) / n);
+    const auto total = strips.size() * w + gaps;
+    const auto h = r.getHeight() - (total > r.getWidth() ? viewport.getScrollBarThickness() : 0);
+    content.setSize (juce::jmax (r.getWidth(), total), h);
 
     int x = 0;
-    int bus = 0;
+    int group = 0;
     for (auto* s : strips)
     {
-        if (s->getTrack() != nullptr && Mixing::isReturnTrack (*s->getTrack()) && bus++ == 0)
-            x += 10;                                  // a little gap before the shared reverb and delay
-        s->setBounds (x, 0, stripWidth, h);
-        x += stripWidth;
+        const int g = s->getTrack() == nullptr ? 0 : Mixing::isReturnTrack (*s->getTrack()) ? 2 : Mixing::isGroupBus (*s->getTrack()) ? 1 : 0;
+        if (g != group) { x += 10; group = g; }
+        s->setBounds (x, 0, w, h);
+        x += w;
     }
     if (content.getWidth() < x)
         content.setSize (x, h);

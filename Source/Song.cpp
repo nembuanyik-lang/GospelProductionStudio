@@ -27,6 +27,8 @@ juce::var Song::toVar() const
         sectionArray.add (juce::var (so));
     }
     o->setProperty ("sections", sectionArray);
+    if (release.isObject())
+        o->setProperty ("release", release);
 
     return juce::var (o);
 }
@@ -55,6 +57,8 @@ Song Song::fromVar (const juce::var& v)
     if (auto* arr = v["sections"].getArray())
         for (const auto& item : *arr)
             s.sections.push_back ({ item["type"].toString(), item["lyrics"].toString() });
+    if (v["release"].isObject())
+        s.release = v["release"];
 
     return s;
 }

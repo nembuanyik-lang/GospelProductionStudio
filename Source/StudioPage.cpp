@@ -1,6 +1,11 @@
+#include "TempoFollow.h"
 #include "InstrumentPanel.h"
 #include "StudioPage.h"
 #include "Automation.h"
+#include "ExportPage.h"
+#include "MasteringPage.h"
+#include "AnalyserPage.h"
+#include "ReleasePage.h"
 #include "ClickSounds.h"
 #include "Dialogs.h"
 
@@ -22,6 +27,10 @@ StudioPage::StudioPage (StudioEngine& e, SongLibrary& lib)
     }
 
     // ---- Tempo, time signature, key -----------------------------------------
+    tempoSlider.setComponentID ("studio.tempo");
+    keyBox.setComponentID ("studio.key");
+    timeSigBox.setComponentID ("studio.timesig");
+    countInBox.setComponentID ("studio.countin");
     tempoSlider.setRange (30.0, 240.0, 1.0);
     tempoSlider.setTextValueSuffix (" BPM");
     tempoSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 96, 34);
@@ -72,6 +81,7 @@ StudioPage::StudioPage (StudioEngine& e, SongLibrary& lib)
     addAndMakeVisible (countInBox);
 
     // ---- Loop range ---------------------------------------------------------
+    loopStart.setComponentID ("studio.loopstart");
     loopStart.setRange (1.0, 999.0, 1.0);
     loopStart.setValue (1.0, juce::dontSendNotification);
     loopStart.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 60, 30);
@@ -115,6 +125,34 @@ StudioPage::StudioPage (StudioEngine& e, SongLibrary& lib)
     addChildComponent (*pianoRoll);
     pianoRoll->onClose = [this] { closePianoRoll(); };
     pianoRoll->onSplitChanged = [this] { resized(); repaint(); };
+    pianoRoll->onDrumGrid = [this] (te::MidiClip* c)
+    {
+        te::MidiClip::Ptr clip = c;
+        juce::Component::SafePointer<StudioPage> safe (this);
+        juce::MessageManager::callAsync ([safe, clip]
+        {
+            if (safe != nullptr && clip != nullptr)
+            {
+                clip->state.removeProperty ("gpsPianoRoll", nullptr);
+                safe->openDrumGrid (clip.get());
+            }
+        });
+    };
+
+    // Drum grid (Step 17)
+    drumGrid = std::make_unique<DrumGrid> (engine, timeline);
+    addChildComponent (*drumGrid);
+    drumGrid->onClose = [this] { closeDrumGrid(); };
+    drumGrid->onPianoRoll = [this] (te::MidiClip* c)
+    {
+        te::MidiClip::Ptr clip = c;
+        juce::Component::SafePointer<StudioPage> safe (this);
+        juce::MessageManager::callAsync ([safe, clip]
+        {
+            if (safe != nullptr && clip != nullptr)
+                safe->openPianoRoll (clip.get());
+        });
+    };
 
     // ---- Comp editor (Step 10) ------------------------------------------------
     compEditor = std::make_unique<CompEditor> (engine, timeline);
@@ -131,12 +169,81 @@ StudioPage::StudioPage (StudioEngine& e, SongLibrary& lib)
     mixerButton.onClick = [this] { setMixerOpen (! isMixerOpen()); };
     addAndMakeVisible (mixerButton);
 
+    exportButton.setWantsKeyboardFocus (false);
+    exportButton.setTooltip ("Save the song as MP3 or WAV, or each track on its own (stems)");
+    exportButton.onClick = [this]
+    {
+        auto* ed = engine.getEdit();
+        const auto* song = getOpenSong();
+        if (ed == nullptr || song == nullptr || onShowPage == nullptr)
+            return;
+        engine.save();
+        onShowPage ("Export  " + juce::String::fromUTF8 ("\xc2\xb7") + "  " + song->title,
+                    std::make_unique<ExportPage> (*ed, song->title));
+    };
+    addAndMakeVisible (exportButton);
+
+    versionsButton.setTooltip ("Copies of this song kept automatically, and your own: go back to any of them");
+    versionsButton.onClick = [this]
+    {
+        const auto* song = getOpenSong();
+        const auto file = engine.getSongFile();
+        if (song == nullptr || file == juce::File() || ! onShowPage)
+            return;
+        engine.save();
+        juce::Component::SafePointer<StudioPage> safe (this);
+        onShowPage ("Versions  " + juce::String::fromUTF8 ("\xc2\xb7") + "  " + song->title,
+                    SongSafety::createVersionsPage (file,
+                                                    [safe] { if (safe != nullptr) safe->engine.save(); },
+                                                    [safe] (const SongSafety::Version& v) { if (safe != nullptr) safe->goBackToVersion (v); }));
+    };
+    addChildComponent (versionsButton);
+
+    ReleasePage::onOpenRequest = [this]
+    {
+        auto* ed = engine.getEdit();
+        const auto* song = getOpenSong();
+        if (ed == nullptr || song == nullptr || onShowPage == nullptr)
+            return;
+        engine.save();
+        juce::Component::SafePointer<StudioPage> safe (this);
+        onShowPage ("Release package  " + juce::String::fromUTF8 ("\xc2\xb7") + "  " + song->title,
+                    std::make_unique<ReleasePage> (*ed, *song, [safe] (const juce::var& details)
+                    {
+                        if (safe != nullptr)
+                            safe->updateSong ([details] (Song& s) { s.release = details; });
+                    }));
+    };
+    AnalyserPlugin::onOpenRequest = [this]
+    {
+        auto* ed = engine.getEdit();
+        const auto* song = getOpenSong();
+        if (ed == nullptr || song == nullptr || onShowPage == nullptr)
+            return;
+        onShowPage ("Analyser  " + juce::String::fromUTF8 ("\xc2\xb7") + "  " + song->title, std::make_unique<AnalyserPage> (*ed));
+    };
+    MasterPlugin::onOpenRequest = [this]
+    {
+        auto* ed = engine.getEdit();
+        const auto* song = getOpenSong();
+        if (ed == nullptr || song == nullptr || onShowPage == nullptr)
+            return;
+        onShowPage ("Mastering  " + juce::String::fromUTF8 ("\xc2\xb7") + "  " + song->title, std::make_unique<MasteringPage> (*ed));
+    };
+
     // Before a song closes, every screen lets go of it (clips, tracks, plugins, windows)
+    // Recordings and tempo changes (Step 23)
+    engine.onAskTempoMode = [this] { askTempoMode(); };
+    engine.onTempoStatus = [this] (const juce::String& t) { tempoStatus = t; repaint(); };
+    tempoSlider.setTooltip ("Tempo of the song. Right-click: what happens to your recordings when the tempo changes");
+    tempoSlider.addMouseListener (this, true);
+
     engine.onEditAboutToChange = [this]
     {
         juce::ModalComponentManager::getInstance()->cancelAllModalComponents();    // clip settings bubbles
         InstrumentPanel::closeAll();
         if (pianoRoll != nullptr)  { pianoRoll->setClip (nullptr);  pianoRoll->setVisible (false); }
+        if (drumGrid != nullptr)   { drumGrid->setClip (nullptr);   drumGrid->setVisible (false); }
         if (compEditor != nullptr) { compEditor->setClip (nullptr); compEditor->setVisible (false); }
         timeline.releaseEdit();
         if (mixer != nullptr) mixer->releaseEdit();
@@ -182,7 +289,70 @@ StudioPage::StudioPage (StudioEngine& e, SongLibrary& lib)
 
 StudioPage::~StudioPage()
 {
+    engine.onAskTempoMode = nullptr;
+    engine.onTempoStatus = nullptr;
+    MasterPlugin::onOpenRequest = nullptr;
+    AnalyserPlugin::onOpenRequest = nullptr;
+    ReleasePage::onOpenRequest = nullptr;
     library.removeChangeListener (this);
+}
+
+//==============================================================================
+//  Recordings and tempo changes (Step 23)
+//==============================================================================
+void StudioPage::askTempoMode()
+{
+    juce::Component::SafePointer<StudioPage> safe (this);
+    juce::AlertWindow::showAsync (juce::MessageBoxOptions{}
+        .withIconType (juce::MessageBoxIconType::QuestionIcon)
+        .withTitle ("The tempo changed: what about your recordings?")
+        .withMessage ("Your recordings were made at the old tempo.\n\n"
+                      "Stretch them: they are made faster or slower (same pitch) so they stay with the beat and the band. "
+                      "Best when you recorded to this song's click.\n\n"
+                      "Leave them: they stay exactly where they are in time. Best when you are setting the tempo to match "
+                      "a song you imported to learn.\n\n"
+                      "Your original recordings are always kept. You can change this later: right-click the Tempo.")
+        .withButton ("Stretch them", 1)
+        .withButton ("Leave them", 2)
+        .withAssociatedComponent (getTopLevelComponent()),
+        [safe] (int result)
+        {
+            if (safe == nullptr) return;
+            if (auto* ed = safe->engine.getEdit())
+            {
+                TempoFollow::setMode (*ed, result == 2 ? TempoFollow::Mode::keep : TempoFollow::Mode::stretch);
+                safe->engine.tempoModeChosen();
+            }
+        });
+}
+
+void StudioPage::mouseDown (const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu() && e.eventComponent != this
+        && (e.eventComponent == &tempoSlider || tempoSlider.isParentOf (e.eventComponent)))
+        showTempoMenu();
+}
+
+void StudioPage::showTempoMenu()
+{
+    auto* ed = engine.getEdit();
+    if (ed == nullptr || ! engine.hasOpenSong()) return;
+    const auto mode = TempoFollow::getMode (*ed);
+    juce::PopupMenu m;
+    m.addSectionHeader ("When the tempo changes, my recordings...");
+    m.addItem (1, "Stretch to stay with the beat (same pitch)", true, mode == TempoFollow::Mode::stretch);
+    m.addItem (2, "Stay where they are in time", true, mode == TempoFollow::Mode::keep);
+    m.addItem (3, "Ask me the next time", true, mode == TempoFollow::Mode::ask);
+    juce::Component::SafePointer<StudioPage> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (tempoSlider), [safe] (int r)
+    {
+        if (safe == nullptr || r == 0) return;
+        if (auto* e = safe->engine.getEdit())
+        {
+            TempoFollow::setMode (*e, r == 1 ? TempoFollow::Mode::stretch : r == 2 ? TempoFollow::Mode::keep : TempoFollow::Mode::ask);
+            if (r != 3) safe->engine.tempoModeChosen();
+        }
+    });
 }
 
 //==============================================================================
@@ -199,6 +369,7 @@ void StudioPage::setMixerOpen (bool open)
     if (open)
     {
         if (pianoRoll != nullptr && pianoRoll->isVisible()) closePianoRoll();
+        if (drumGrid != nullptr && drumGrid->isVisible())   closeDrumGrid (true);
         if (compEditor != nullptr && compEditor->isOpen())   closeCompEditor();
     }
     mixer->setVisible (open);
@@ -211,11 +382,29 @@ void StudioPage::setMixerOpen (bool open)
     repaint();
 }
 
+bool StudioPage::isDrumClip (te::MidiClip& clip) const
+{
+    if (auto* track = dynamic_cast<te::AudioTrack*> (clip.getTrack()))
+        return StudioEngine::getInstrumentId (*track) == "drums" || track->getName().containsIgnoreCase ("drum");
+    return false;
+}
+
 void StudioPage::openPianoRoll (te::MidiClip* clip)
 {
     setMixerOpen (false);
     if (clip == nullptr)
         return;
+
+    // Drum clips open in the drum grid, unless you chose the piano roll for this clip
+    const bool drums = isDrumClip (*clip);
+    if (drums && ! (bool) clip->state.getProperty ("gpsPianoRoll", false))
+    {
+        openDrumGrid (clip);
+        return;
+    }
+    if (drumGrid != nullptr && drumGrid->isOpen())
+        closeDrumGrid (true);
+    pianoRoll->setDrumGridAvailable (drums);
 
     // The keyboard plays (and records) on the clip's own track while editing it.
     if (auto* track = dynamic_cast<te::AudioTrack*> (clip->getTrack()))
@@ -234,11 +423,63 @@ void StudioPage::openPianoRoll (te::MidiClip* clip)
     timeline.refreshAll();
 }
 
+void StudioPage::openDrumGrid (te::MidiClip* clip)
+{
+    setMixerOpen (false);
+    if (clip == nullptr)
+        return;
+
+    if (auto* track = dynamic_cast<te::AudioTrack*> (clip->getTrack()))
+        if (StudioEngine::isInstrumentTrack (*track))
+            engine.setArmedTrack (track);     // so clicking a drum name plays it
+
+    if (pianoRoll->isOpen() || pianoRoll->isVisible())
+    {
+        pianoRoll->setClip (nullptr);
+        pianoRoll->setVisible (false);
+    }
+    if (compEditor != nullptr && compEditor->isOpen())
+    {
+        compEditor->setClip (nullptr);
+        compEditor->setVisible (false);
+    }
+    drumGrid->setVisible (true);
+    resized();
+    repaint();
+    drumGrid->setClip (clip);
+    drumGrid->grabKeyboardFocus();
+    timeline.refreshAll();
+}
+
+void StudioPage::closeDrumGrid (bool now)
+{
+    auto close = [] (StudioPage& p)
+    {
+        if (p.drumGrid == nullptr)
+            return;
+        p.drumGrid->setClip (nullptr);
+        p.drumGrid->setVisible (false);
+        if (! p.isMixerOpen()) p.timeline.setVisible (true);
+        p.resized();
+        p.repaint();
+        p.timeline.refreshAll();
+    };
+    if (now)
+    {
+        close (*this);
+        return;
+    }
+    juce::Component::SafePointer<StudioPage> safe (this);
+    juce::MessageManager::callAsync ([safe, close] { if (safe != nullptr) close (*safe); });
+}
+
 void StudioPage::openCompEditor (te::WaveAudioClip* clip)
 {
     setMixerOpen (false);
     if (clip == nullptr)
         return;
+    if (drumGrid != nullptr && drumGrid->isOpen())
+        closeDrumGrid (true);
     if (pianoRoll->isOpen())
     {
         pianoRoll->setClip (nullptr);
@@ -295,6 +536,8 @@ void StudioPage::openSong (const juce::String& id)
         pianoRoll->setVisible (false);
         timeline.setVisible (true);
     }
+    if (drumGrid != nullptr && drumGrid->isOpen())
+        closeDrumGrid (true);
     if (compEditor != nullptr && compEditor->isOpen())
     {
         compEditor->setClip (nullptr);
@@ -306,6 +549,44 @@ void StudioPage::openSong (const juce::String& id)
     engine.ensureSections (*song);
     timeline.editChanged();
     refreshFromSong();
+    resized();                 // the Versions button appears now that a song is open
+}
+
+//==============================================================================
+//  Versions and recovery (Steps 43-44)
+//==============================================================================
+void StudioPage::goBackToVersion (const SongSafety::Version& v)
+{
+    const auto* open = getOpenSong();
+    const auto file = engine.getSongFile();
+    if (open == nullptr || file == juce::File())
+        return;
+    const auto song = *open;
+    engine.save();
+    engine.discardSongWithoutSaving();         // the song as it is now was just saved: restore() keeps it as a version
+    SongSafety::restore (file, v);
+    engine.openSong (song, file);
+    engine.ensureSections (song);
+    timeline.editChanged();
+    refreshFromSong();
+    resized();
+    repaint();
+}
+
+int StudioPage::rescueRecordings (const SongSafety::Session::Previous& p)
+{
+    auto* edit = engine.getEdit();
+    if (edit == nullptr)
+        return 0;
+    SongSafety::snapshot (engine.getSongFile(), "rescue");
+    const auto n = SongSafety::Session::rescueRecordings (*edit, p);
+    if (n > 0)
+    {
+        engine.save();
+        timeline.editChanged();
+        repaint();
+    }
+    return n;
 }
 
 void StudioPage::songWasDeleted (const juce::String& id)
@@ -318,6 +599,8 @@ void StudioPage::songWasDeleted (const juce::String& id)
             pianoRoll->setVisible (false);
             timeline.setVisible (true);
         }
+        if (drumGrid != nullptr && drumGrid->isOpen())
+            closeDrumGrid (true);
         if (compEditor != nullptr && compEditor->isOpen())
         {
             compEditor->setClip (nullptr);
@@ -477,7 +760,7 @@ void StudioPage::paint (juce::Graphics& g)
     const auto* song = getOpenSong();
 
     // ---- Song header --------------------------------------------------------
-    auto headerBox = headerArea;
+    auto headerBox = headerArea.withTrimmedRight (versionsButton.isVisible() ? versionsButton.getWidth() + 12 : 0);
     g.setColour (text);
     g.setFont (studioFont (compact ? 16.0f : 21.0f, true));
     const auto titleText = song != nullptr ? song->title : juce::String ("No song open");
@@ -498,6 +781,7 @@ void StudioPage::paint (juce::Graphics& g)
     g.drawText (song != nullptr
                     ? song->key + dot + song->timeSignature + dot + juce::String (song->tempo)
                           + (song->isCompoundMeter() ? " BPM (dotted quarter)" : " BPM") + dot + song->theme
+                          + (tempoStatus.isNotEmpty() ? dot + tempoStatus : juce::String())
                     : juce::String ("In the Song Library, choose a song and click Open in Studio. "
                                     "The keyboard still plays meanwhile."),
                 headerBox, compact ? juce::Justification::centredLeft : juce::Justification::topLeft, true);
@@ -579,11 +863,14 @@ void StudioPage::resized()
     this->compact = getHeight() < 640 || getWidth() < 1150;
 
     // While the piano roll is open the song title and the metronome card fold away to give the notes room.
-    const auto compact = (pianoRoll != nullptr && pianoRoll->isVisible()) || (compEditor != nullptr && compEditor->isVisible())
+    const auto editorOpen = (pianoRoll != nullptr && pianoRoll->isVisible()) || (compEditor != nullptr && compEditor->isVisible())
+                          || (drumGrid != nullptr && drumGrid->isVisible())
                           || isMixerOpen();
 
-    headerArea = compact ? juce::Rectangle<int>() : area.removeFromTop (this->compact ? 24 : 44);
-    if (! compact)
+    headerArea = editorOpen ? juce::Rectangle<int>() : area.removeFromTop (this->compact ? 24 : 44);
+    versionsButton.setVisible (! headerArea.isEmpty() && getOpenSong() != nullptr);
+    versionsButton.setBounds (headerArea.withLeft (headerArea.getRight() - 104).withSizeKeepingCentre (104, this->compact ? 24 : 30));
+    if (! editorOpen)
         area.removeFromTop (this->compact ? 4 : 6);
 
     auto field = [this] (juce::Rectangle<int>& row, int width, const juce::String& label)
@@ -612,6 +899,8 @@ void StudioPage::resized()
     t.removeFromLeft (6);
     writeButton.setBounds (t.removeFromLeft (58).withSizeKeepingCentre (58, 30));
     mixerButton.setBounds (t.removeFromRight (this->compact ? 80 : 96).withSizeKeepingCentre (this->compact ? 80 : 96, 34));
+    t.removeFromRight (8);
+    exportButton.setBounds (t.removeFromRight (this->compact ? 74 : 90).withSizeKeepingCentre (this->compact ? 74 : 90, 34));
     t.removeFromRight (10);
 
     t.removeFromLeft (this->compact ? 10 : 14);
@@ -637,9 +926,9 @@ void StudioPage::resized()
     for (juce::Component* c : { (juce::Component*) &clickButton, (juce::Component*) &clickSoundBox,
                                 (juce::Component*) &clickVolume, (juce::Component*) &accentToggle,
                                 (juce::Component*) &countInBox, (juce::Component*) &loopStart, (juce::Component*) &loopLength })
-        c->setVisible (! compact);
+        c->setVisible (! editorOpen);
 
-    if (compact)
+    if (editorOpen)
     {
         metronomeCard = {};
     }
@@ -690,6 +979,21 @@ void StudioPage::resized()
             area.removeFromTop (6);
         }
         pianoRoll->setBounds (area);
+        return;
+    }
+
+    if (drumGrid != nullptr && drumGrid->isVisible())
+    {
+        // Timeline on top (you see the song), drum grid below. The grid needs about 17 rows.
+        const auto gridHeight = 40 + 22 + 17 * 22 + 34;
+        const auto split = area.getHeight() >= gridHeight + 150;
+        timeline.setVisible (split);
+        if (split)
+        {
+            timeline.setBounds (area.removeFromTop (juce::jmax (150, area.getHeight() - gridHeight - 6)));
+            area.removeFromTop (6);
+        }
+        drumGrid->setBounds (area);
         return;
     }
 

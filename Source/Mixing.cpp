@@ -1,5 +1,9 @@
 #include "Mixing.h"
+#include "DeEsserPlugin.h"
 #include "StudioLookAndFeel.h"
+#include "MasterPlugin.h"
+#include "VocalTunePlugin.h"
+#include "AnalyserPlugin.h"
 
 namespace Mixing
 {
@@ -41,7 +45,7 @@ juce::Array<te::AudioTrack*> getSongTracks (te::Edit& edit)
 {
     juce::Array<te::AudioTrack*> result;
     for (auto* t : te::getAudioTracks (edit))
-        if (! isReturnTrack (*t))
+        if (! isReturnTrack (*t) && ! isGroupBus (*t))
             result.add (t);
     return result;
 }
@@ -84,7 +88,7 @@ te::AudioTrack* ensureReturn (te::Edit& edit, int bus)
                 r->setRoomSize (0.72f);
                 r->setDamp (0.45f);
                 r->setWidth (1.0f);
-                r->setWet (0.5f);             // about +3.5 dB: Freeverb is quiet
+                r->setWet (1.0f / 3.0f);      // 0 dB (the reverb scales wet by 3)
                 r->setDry (0.0f);
             }
             track->pluginList.insertPlugin (p, 1, nullptr);
@@ -158,14 +162,17 @@ bool isMixerPlugin (te::Plugin& p)
     return dynamic_cast<te::VolumeAndPanPlugin*> (&p) != nullptr
         || dynamic_cast<te::LevelMeterPlugin*> (&p) != nullptr
         || dynamic_cast<te::AuxSendPlugin*> (&p) != nullptr
-        || dynamic_cast<te::AuxReturnPlugin*> (&p) != nullptr;
+        || dynamic_cast<te::AuxReturnPlugin*> (&p) != nullptr
+        || dynamic_cast<AnalyserPlugin*> (&p) != nullptr;
 }
 
 const std::vector<BuiltIn>& builtInEffects()
 {
     static const std::vector<BuiltIn> list {
+        { VocalTunePlugin::xmlTypeName,      "Vocal tuning",    "gentle pitch correction for a voice" },
         { te::EqualiserPlugin::xmlTypeName,  "EQ (4 bands)",    "shape the tone: less mud, more clarity" },
         { te::CompressorPlugin::xmlTypeName, "Compressor",      "even out loud and soft words" },
+        { DeEsserPlugin::xmlTypeName,        "De-esser",        "soften harsh S and SH sounds in a voice" },
         { te::ReverbPlugin::xmlTypeName,     "Reverb",          "a room on this track only" },
         { te::DelayPlugin::xmlTypeName,      "Delay (echo)",    "echoes" },
         { te::ChorusPlugin::xmlTypeName,     "Chorus",          "wider, shimmering keys and guitars" },
@@ -205,7 +212,20 @@ te::Plugin* addMasterEffect (te::Edit& edit, te::Plugin::Ptr p)
 {
     if (p == nullptr)
         return nullptr;
-    edit.getMasterPluginList().insertPlugin (p, edit.getMasterPluginList().getPlugins().size(), nullptr);
+    // Before the mastering and the meter: mastering is always the last polish
+    auto& list = edit.getMasterPluginList();
+    int index = list.getPlugins().size();
+    for (int i = 0; i < list.getPlugins().size(); ++i)
+    {
+        auto* q = list.getPlugins()[i].get();
+        if (dynamic_cast<MasterPlugin*> (q) != nullptr || dynamic_cast<te::LevelMeterPlugin*> (q) != nullptr
+             || dynamic_cast<AnalyserPlugin*> (q) != nullptr)
+        {
+            index = i;
+            break;
+        }
+    }
+    list.insertPlugin (p, index, nullptr);
     return p.get();
 }
 
@@ -232,16 +252,33 @@ namespace
                                           { "Mid freq 2", 3000 }, { "Mid gain 2", -2 }, { "Mid Q 2", 0.7f }, { "High-pass freq", 8000 }, { "High-pass gain", -3 } } },
             { "Bass: tight",            { { "Low-pass freq", 60 }, { "Low-pass gain", 2 }, { "Mid freq 1", 250 }, { "Mid gain 1", -3 }, { "Mid Q 1", 1.0f },
                                           { "Mid freq 2", 800 }, { "Mid gain 2", 1.5f }, { "Mid Q 2", 0.8f }, { "High-pass freq", 5000 }, { "High-pass gain", -3 } } },
+            { "Lead vocal: warm",       { { "Low-pass freq", 90 }, { "Low-pass gain", -4 }, { "Mid freq 1", 350 }, { "Mid gain 1", -1.5f }, { "Mid Q 1", 0.9f },
+                                          { "Mid freq 2", 3000 }, { "Mid gain 2", 1.5f }, { "Mid Q 2", 0.7f }, { "High-pass freq", 11000 }, { "High-pass gain", 1 } } },
+            { "Lead vocal: bright and airy", { { "Low-pass freq", 110 }, { "Low-pass gain", -5 }, { "Mid freq 1", 300 }, { "Mid gain 1", -2.5f }, { "Mid Q 1", 0.9f },
+                                          { "Mid freq 2", 4000 }, { "Mid gain 2", 3 }, { "Mid Q 2", 0.7f }, { "High-pass freq", 11000 }, { "High-pass gain", 3.5f } } },
+            { "Low voice: less boom",   { { "Low-pass freq", 75 }, { "Low-pass gain", -4 }, { "Mid freq 1", 220 }, { "Mid gain 1", -3 }, { "Mid Q 1", 1.0f },
+                                          { "Mid freq 2", 3000 }, { "Mid gain 2", 2 }, { "Mid Q 2", 0.7f }, { "High-pass freq", 10000 }, { "High-pass gain", 1.5f } } },
+            { "Speech: clear",          { { "Low-pass freq", 120 }, { "Low-pass gain", -6 }, { "Mid freq 1", 300 }, { "Mid gain 1", -2 }, { "Mid Q 1", 0.8f },
+                                          { "Mid freq 2", 2500 }, { "Mid gain 2", 2.5f }, { "Mid Q 2", 0.7f }, { "High-pass freq", 9000 }, { "High-pass gain", 0 } } },
             { "Guitar: present",        { { "Low-pass freq", 120 }, { "Low-pass gain", -3 }, { "Mid freq 1", 350 }, { "Mid gain 1", -1.5f },
                                           { "Mid freq 2", 2500 }, { "Mid gain 2", 2 }, { "Mid Q 2", 0.7f }, { "High-pass freq", 9000 }, { "High-pass gain", 1 } } },
         };
         static const std::vector<Preset> comp {
             { "Lead vocal: gentle",     { { "threshold", 0.126f }, { "ratio", 1.0f / 3.0f }, { "attack", 10 }, { "release", 120 }, { "output gain", 3 } } },
             { "Lead vocal: strong",     { { "threshold", 0.063f }, { "ratio", 0.2f }, { "attack", 5 }, { "release", 100 }, { "output gain", 6 } } },
+            { "Speech: steady",         { { "threshold", 0.1f }, { "ratio", 0.25f }, { "attack", 8 }, { "release", 150 }, { "output gain", 5 } } },
             { "Choir: glue",            { { "threshold", 0.18f }, { "ratio", 0.5f }, { "attack", 30 }, { "release", 200 }, { "output gain", 2 } } },
             { "Bass: steady",           { { "threshold", 0.13f }, { "ratio", 0.25f }, { "attack", 20 }, { "release", 150 }, { "output gain", 3 } } },
             { "Drums: punch",           { { "threshold", 0.2f }, { "ratio", 0.25f }, { "attack", 25 }, { "release", 80 }, { "output gain", 2 } } },
             { "Whole song: gentle",     { { "threshold", 0.35f }, { "ratio", 0.5f }, { "attack", 50 }, { "release", 250 }, { "output gain", 1.5f } } },
+        };
+        static const std::vector<Preset> deess {
+            { "Lead vocal: high voice (women)", { { "split freq", 7500 }, { "sibilance level", -32 }, { "range", 8 } } },
+            { "Lead vocal: low voice (men)",    { { "split freq", 5500 }, { "sibilance level", -32 }, { "range", 8 } } },
+            { "Choir and backing vocals",       { { "split freq", 6500 }, { "sibilance level", -28 }, { "range", 6 } } },
+            { "Lead vocal: any voice",          { { "split freq", 6500 }, { "sibilance level", -32 }, { "range", 8 } } },
+            { "Lead vocal: bright (more control)", { { "split freq", 7000 }, { "sibilance level", -36 }, { "range", 10 } } },
+            { "Strong (very harsh S)",          { { "split freq", 6000 }, { "sibilance level", -40 }, { "range", 12 } } },
         };
         static const std::vector<Preset> reverb {
             { "Small room",             { { "room size", 0.35f }, { "damping", 0.6f } } },
@@ -251,6 +288,7 @@ namespace
         if (type == te::EqualiserPlugin::xmlTypeName)  return eq;
         if (type == te::CompressorPlugin::xmlTypeName) return comp;
         if (type == te::ReverbPlugin::xmlTypeName)     return reverb;
+        if (type == DeEsserPlugin::xmlTypeName)        return deess;
         return none;
     }
 
@@ -270,7 +308,12 @@ namespace
             slider.setRange (range.getStart(), range.getEnd(), 0.0);
             const auto id = p.paramID.toLowerCase();
             if (id.contains ("freq") || id == "frequency")
-                slider.setSkewFactorFromMidPoint (1000.0);                 // hearing is logarithmic
+            {
+                // Hearing is logarithmic: the middle of the slider is the middle in octaves
+                const auto mid = std::sqrt (juce::jmax (1.0f, range.getStart()) * range.getEnd());
+                if (mid > range.getStart() && mid < range.getEnd())
+                    slider.setSkewFactorFromMidPoint (mid);
+            }
             else if (id.endsWith (" q") || id.contains (" q "))
                 slider.setSkewFactorFromMidPoint (1.0);
             else if (id == "threshold")
@@ -308,6 +351,42 @@ namespace
         te::AutomatableParameter::Ptr param;
         juce::Label name, value;
         juce::Slider slider;
+    };
+
+    // De-esser: how much the "s" is being turned down right now
+    class ReductionMeter final : public juce::Component, private juce::Timer
+    {
+    public:
+        explicit ReductionMeter (DeEsserPlugin& p) : plugin (&p), keep (&p)  { startTimerHz (20); }
+
+        void paint (juce::Graphics& g) override
+        {
+            auto r = getLocalBounds().toFloat();
+            g.setColour (juce::Colours::white.withAlpha (0.75f));
+            g.setFont (juce::FontOptions (13.0f));
+            g.drawText ("Turning the S down", r.removeFromLeft (130), juce::Justification::centredLeft);
+            auto bar = r.removeFromLeft (r.getWidth() - 90).reduced (4, 7);
+            g.setColour (juce::Colour (0xff2a2e36));
+            g.fillRoundedRectangle (bar, 3.0f);
+            const auto maxDb = plugin != nullptr ? juce::jmax (1.0f, plugin->rangeDb.getCurrentValue()) : 10.0f;
+            g.setColour (juce::Colour (0xffe07a4f));
+            g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * juce::jlimit (0.0f, 1.0f, shown / maxDb)), 3.0f);
+            g.setColour (juce::Colour (0xffd4a843));
+            g.drawText (juce::String (shown, 1) + " dB", r, juce::Justification::centredRight);
+        }
+
+    private:
+        void timerCallback() override
+        {
+            if (plugin == nullptr) return;
+            const auto now = plugin->getReductionDb();
+            shown = now > shown ? now : shown * 0.85f;
+            repaint();
+        }
+
+        DeEsserPlugin* plugin = nullptr;
+        te::Plugin::Ptr keep;                // the plugin stays alive while its panel is open
+        float shown = 0.0f;
     };
 
     class GenericEditor final : public te::Plugin::EditorComponent
@@ -375,7 +454,13 @@ namespace
                 addAndMakeVisible (tempoNotes);
             }
 
-            const auto extra = dynamic_cast<te::DelayPlugin*> (&p) != nullptr ? 70 : 0;
+            if (auto* de = dynamic_cast<DeEsserPlugin*> (&p))
+            {
+                meter = std::make_unique<ReductionMeter> (*de);
+                addAndMakeVisible (*meter);
+            }
+
+            const auto extra = (dynamic_cast<te::DelayPlugin*> (&p) != nullptr ? 70 : 0) + (meter != nullptr ? 36 : 0);
             setSize (520, 70 + rows.size() * 30 + extra);
         }
 
@@ -406,6 +491,11 @@ namespace
             }
             for (auto* row : rows)
                 row->setBounds (r.removeFromTop (30).reduced (0, 3));
+            if (meter != nullptr)
+            {
+                r.removeFromTop (6);
+                meter->setBounds (r.removeFromTop (28));
+            }
         }
 
     private:
@@ -415,12 +505,309 @@ namespace
         juce::OwnedArray<ParamRow> rows;
         juce::Slider delayTime;
         juce::ComboBox tempoNotes, presetBox;
+        std::unique_ptr<ReductionMeter> meter;
     };
 }
 
 std::unique_ptr<te::Plugin::EditorComponent> createGenericEditor (te::Plugin& p)
 {
     return std::make_unique<GenericEditor> (p);
+}
+
+//==============================================================================
+//  Presets by name, and vocal chains (Step 12)
+//==============================================================================
+juce::StringArray presetNames (const juce::String& type)
+{
+    juce::StringArray names;
+    for (auto& p : presetsFor (type))
+        names.add (p.name);
+    return names;
+}
+
+bool applyPreset (te::Plugin& plugin, const juce::String& name)
+{
+    for (auto& p : presetsFor (plugin.getPluginType()))
+        if (name == p.name)
+        {
+            for (auto& [id, value] : p.values)
+                if (auto param = plugin.getAutomatableParameterByID (id))
+                    param->setParameter (value, juce::sendNotification);
+            return true;
+        }
+    return false;
+}
+
+const std::vector<VocalChain>& vocalChains()
+{
+    static const std::vector<VocalChain> list {
+        { "Lead vocal: warm worship",       "smooth and close, a church room behind it",
+          "Lead vocal: warm",            "Lead vocal: gentle", "Lead vocal: any voice",              -12.0f, -24.0f },
+        { "Lead vocal: bright and modern",  "clear and up front, like a radio gospel single",
+          "Lead vocal: bright and airy", "Lead vocal: strong", "Lead vocal: bright (more control)",  -16.0f, -20.0f },
+        { "Lead vocal: low voice (men)",    "less boom, more words",
+          "Low voice: less boom",        "Lead vocal: gentle", "Lead vocal: low voice (men)",        -13.0f, -26.0f },
+        { "Lead vocal: high voice (women, children)", "clear top without harsh S",
+          "Lead vocal: clear",           "Lead vocal: gentle", "Lead vocal: high voice (women)",     -12.0f, -24.0f },
+        { "Choir and backing vocals",       "soft, blended, further back in the room",
+          "Choir: warm and soft",        "Choir: glue",        "Choir and backing vocals",           -8.0f,  sendOffDb },
+        { "Preaching and spoken word",      "every word clear, almost dry",
+          "Speech: clear",               "Speech: steady",     "Lead vocal: any voice",              -26.0f, sendOffDb },
+    };
+    return list;
+}
+
+namespace
+{
+    const juce::Identifier chainId ("gpsVocalChain");
+
+    int insertIndexForEffects (te::AudioTrack& track)
+    {
+        // At the end of the effects: before the volume, sends and meter
+        const auto plugins = track.pluginList.getPlugins();
+        for (int i = 0; i < plugins.size(); ++i)
+            if (dynamic_cast<te::VolumeAndPanPlugin*> (plugins[i].get()) != nullptr
+                 || dynamic_cast<te::LevelMeterPlugin*> (plugins[i].get()) != nullptr
+                 || dynamic_cast<te::AuxSendPlugin*> (plugins[i].get()) != nullptr)
+                return i;
+        return plugins.size();
+    }
+}
+
+void removeVocalChain (te::AudioTrack& track)
+{
+    for (auto* p : track.pluginList.getPlugins())
+        if (p->state.hasProperty (chainId))
+            p->deleteFromParent();
+}
+
+juce::String currentVocalChain (te::AudioTrack& track)
+{
+    for (auto* p : track.pluginList.getPlugins())
+        if (p->state.hasProperty (chainId))
+            return p->state[chainId].toString();
+    return {};
+}
+
+bool applyVocalChain (te::AudioTrack& track, int index)
+{
+    if (! juce::isPositiveAndBelow (index, (int) vocalChains().size()))
+        return false;
+    const auto& chain = vocalChains()[(size_t) index];
+    removeVocalChain (track);
+
+    // EQ (cut the mud first), compressor (even it out), de-esser (after the compressor has brought the S up)
+    const std::pair<const char*, const char*> steps[] = {
+        { te::EqualiserPlugin::xmlTypeName,  chain.eq },
+        { te::CompressorPlugin::xmlTypeName, chain.compressor },
+        { DeEsserPlugin::xmlTypeName,        chain.deEsser },
+    };
+    for (auto& [type, preset] : steps)
+    {
+        auto p = createBuiltIn (track.edit, type);
+        if (p == nullptr)
+            return false;
+        track.pluginList.insertPlugin (p, insertIndexForEffects (track), nullptr);
+        applyPreset (*p, preset);
+        p->state.setProperty (chainId, chain.name, nullptr);
+    }
+
+    setSendDb (track, reverbBus, chain.reverbDb);
+    setSendDb (track, delayBus, chain.delayDb);
+    return true;
+}
+
+//==============================================================================
+//  Group buses and sidechain ducking (plan Step 14)
+//==============================================================================
+namespace
+{
+    const juce::Identifier groupBusFlag ("gpsGroupBus"), duckerId ("gpsDucker");
+}
+
+const std::vector<BusKind>& busKinds()
+{
+    static const std::vector<BusKind> list {
+        { "Choir bus",  0xffb07ed8, "Choir: warm and soft", "Choir: glue",        "all the choir voices: one blend, one fader" },
+        { "Vocal bus",  0xff4caf7d, "Flat (no change)",     "Lead vocal: gentle", "lead and harmony vocals together" },
+        { "Band bus",   0xff5b8def, "Flat (no change)",     "Whole song: gentle", "keys, bass, guitar: glued together" },
+        { "Drum bus",   0xffe07a4f, "Flat (no change)",     "Drums: punch",       "all drum and percussion tracks" },
+        { "Bus",        0xff9097a3, "",                     "",                   "an empty bus" },
+    };
+    return list;
+}
+
+bool isGroupBus (const te::AudioTrack& t)        { return (bool) t.state.getProperty (groupBusFlag, false); }
+
+juce::Array<te::AudioTrack*> getGroupBuses (te::Edit& edit)
+{
+    juce::Array<te::AudioTrack*> result;
+    for (auto* t : te::getAudioTracks (edit))
+        if (isGroupBus (*t))
+            result.add (t);
+    return result;
+}
+
+te::AudioTrack* createGroupBus (te::Edit& edit, int kindIndex)
+{
+    const auto& kind = busKinds()[(size_t) juce::jlimit (0, (int) busKinds().size() - 1, kindIndex)];
+
+    // After the song tracks and the other buses, before the shared reverb and delay
+    te::Track* after = nullptr;
+    for (auto* t : te::getAudioTracks (edit))
+        if (! isReturnTrack (*t))
+            after = t;
+    const auto insertPoint = after != nullptr ? te::TrackInsertPoint (*after, false) : te::TrackInsertPoint::getEndOfTracks (edit);
+    auto bus = edit.insertNewAudioTrack (insertPoint, nullptr, true);
+    if (bus == nullptr)
+        return nullptr;
+
+    // A unique name: "Choir bus", "Choir bus 2"
+    juce::String name = kind.name;
+    for (int n = 2; ; ++n)
+    {
+        bool taken = false;
+        for (auto* t : getGroupBuses (edit))
+            taken = taken || t->getName() == name;
+        if (! taken) break;
+        name = juce::String (kind.name) + " " + juce::String (n);
+    }
+
+    bus->state.setProperty (groupBusFlag, true, &edit.getUndoManager());
+    bus->setName (name);
+    bus->setColour (juce::Colour (kind.colour));
+
+    if (juce::String (kind.eq).isNotEmpty() && juce::String (kind.eq) != "Flat (no change)")
+        if (auto p = createBuiltIn (edit, te::EqualiserPlugin::xmlTypeName))
+        {
+            bus->pluginList.insertPlugin (p, 0, nullptr);
+            applyPreset (*p, kind.eq);
+        }
+    if (juce::String (kind.compressor).isNotEmpty())
+        if (auto p = createBuiltIn (edit, te::CompressorPlugin::xmlTypeName))
+        {
+            int index = 0;
+            const auto plugins = bus->pluginList.getPlugins();
+            for (int i = 0; i < plugins.size(); ++i)
+                if (dynamic_cast<te::EqualiserPlugin*> (plugins[i].get()) != nullptr) index = i + 1;
+            bus->pluginList.insertPlugin (p, index, nullptr);
+            applyPreset (*p, kind.compressor);
+        }
+    return bus.get();
+}
+
+te::AudioTrack* getBusOf (te::AudioTrack& track)
+{
+    auto* dest = track.getOutput().getDestinationTrack();
+    return dest != nullptr && isGroupBus (*dest) ? dest : nullptr;
+}
+
+juce::Array<te::AudioTrack*> getBusMembers (te::AudioTrack& bus)
+{
+    juce::Array<te::AudioTrack*> result;
+    for (auto* t : te::getAudioTracks (bus.edit))
+        if (t != &bus && t->getOutput().outputsToDestTrack (bus))
+            result.add (t);
+    return result;
+}
+
+void routeToBus (te::AudioTrack& track, te::AudioTrack* bus)
+{
+    if (bus == &track || isGroupBus (track) || isReturnTrack (track))
+        return;                                        // buses and returns always go to the master
+    if (bus != nullptr && isGroupBus (*bus))
+        track.getOutput().setOutputToTrack (bus);
+    else
+        track.getOutput().setOutputToDefaultDevice (false);
+}
+
+void deleteGroupBus (te::AudioTrack& bus)
+{
+    for (auto* t : getBusMembers (bus))
+        t->getOutput().setOutputToDefaultDevice (false);
+    // Tracks that ducked under this bus stop ducking
+    for (auto* t : te::getAudioTracks (bus.edit))
+        if (getDuckingSource (*t) == &bus)
+            setDucking (*t, nullptr, 0);
+    bus.edit.deleteTrack (&bus);
+}
+
+const std::vector<DuckKind>& duckKinds()
+{
+    static const std::vector<DuckKind> list {
+        { "Gentle",                             "a little room, hardly noticed",          0.25f, 0.5f,  15.0f, 250.0f },
+        { "Kick pushes the bass (tight)",       "bass and kick stop fighting",            0.1f,  0.2f,  3.0f,  90.0f },
+        { "Music dips under the voice (smooth)", "for preaching, announcements, a spoken part", 0.08f, 0.2f, 20.0f, 450.0f },
+        { "Strong pump (dance praise)",         "the pumping effect, very audible",       0.08f, 0.1f,  2.0f,  160.0f },
+    };
+    return list;
+}
+
+te::Plugin* findDucker (te::AudioTrack& track)
+{
+    for (auto* p : track.pluginList.getPlugins())
+        if (p->state.hasProperty (duckerId))
+            return p;
+    return nullptr;
+}
+
+te::AudioTrack* getDuckingSource (te::AudioTrack& track)
+{
+    if (auto* p = findDucker (track))
+        for (auto* t : te::getAudioTracks (track.edit))
+            if (t->itemID == p->getSidechainSourceID())
+                return t;
+    return nullptr;
+}
+
+int getDuckingKind (te::AudioTrack& track)
+{
+    if (auto* p = findDucker (track))
+        return p->state.getProperty (duckerId, 0);
+    return -1;
+}
+
+void setDucking (te::AudioTrack& track, te::AudioTrack* source, int kindIndex)
+{
+    if (source == nullptr || source == &track)
+    {
+        if (auto* p = findDucker (track))
+            p->deleteFromParent();
+        return;
+    }
+
+    auto* comp = dynamic_cast<te::CompressorPlugin*> (findDucker (track));
+    if (comp == nullptr)
+    {
+        auto p = createBuiltIn (track.edit, te::CompressorPlugin::xmlTypeName);
+        comp = dynamic_cast<te::CompressorPlugin*> (p.get());
+        if (comp == nullptr)
+            return;
+        // Last of the effects, so it ducks the finished sound
+        int index = track.pluginList.getPlugins().size();
+        const auto plugins = track.pluginList.getPlugins();
+        for (int i = 0; i < plugins.size(); ++i)
+            if (dynamic_cast<te::VolumeAndPanPlugin*> (plugins[i].get()) != nullptr
+                 || dynamic_cast<te::LevelMeterPlugin*> (plugins[i].get()) != nullptr
+                 || dynamic_cast<te::AuxSendPlugin*> (plugins[i].get()) != nullptr)
+            {
+                index = i;
+                break;
+            }
+        track.pluginList.insertPlugin (p, index, nullptr);
+    }
+
+    const auto& kind = duckKinds()[(size_t) juce::jlimit (0, (int) duckKinds().size() - 1, kindIndex)];
+    comp->state.setProperty (duckerId, kindIndex, &track.edit.getUndoManager());
+    comp->useSidechainTrigger = true;
+    comp->setSidechainSourceID (source->itemID);
+    if (comp->getNumWires() == 0)
+        comp->guessSidechainRouting();
+    comp->thresholdGain.setParameter (kind.thresholdGain, juce::sendNotification);
+    comp->ratio.setParameter (kind.ratio, juce::sendNotification);
+    comp->attackMs.setParameter (kind.attackMs, juce::sendNotification);
+    comp->releaseMs.setParameter (kind.releaseMs, juce::sendNotification);
+    comp->outputDb.setParameter (0.0f, juce::sendNotification);
 }
 
 } // namespace Mixing

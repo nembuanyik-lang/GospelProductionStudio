@@ -3,9 +3,20 @@
 #include "StudioKeysPlugin.h"
 #include "SamplerPlugin.h"
 #include "OrganPlugin.h"
+#include "GuitarPlugin.h"
+#include "Percussion.h"
 #include "ClickSounds.h"
 #include "Mixing.h"
 #include "Automation.h"
+#include "MasterPlugin.h"
+#include "VocalTunePlugin.h"
+#include "DeEsserPlugin.h"
+#include "AnalyserPlugin.h"
+#include "Harmony.h"
+#include "TempoFollow.h"
+#include "SongFiles.h"
+#include "SongSafety.h"
+#include "BackgroundWork.h"
 #include <map>
 
 const char* StudioKeysPlugin::xmlTypeName = "GospelStudioKeys";
@@ -156,6 +167,12 @@ StudioEngine::StudioEngine()
     engine.getPluginManager().createBuiltInType<StudioKeysPlugin>();
     engine.getPluginManager().createBuiltInType<SamplerPlugin>();
     engine.getPluginManager().createBuiltInType<OrganPlugin>();
+    engine.getPluginManager().createBuiltInType<GuitarPlugin>();
+    engine.getPluginManager().createBuiltInType<PercussionPlugin>();
+    engine.getPluginManager().createBuiltInType<MasterPlugin>();
+    engine.getPluginManager().createBuiltInType<VocalTunePlugin>();
+    engine.getPluginManager().createBuiltInType<DeEsserPlugin>();
+    engine.getPluginManager().createBuiltInType<AnalyserPlugin>();
 
     auto& dm = engine.getDeviceManager();
 
@@ -189,6 +206,7 @@ StudioEngine::StudioEngine()
 StudioEngine::~StudioEngine()
 {
     alive->store (false);
+    tempoStretcher.reset();             // waits for a stretch in progress to stop
     PluginHost::closeManager();
     PluginHost::releaseScanner();
     if (edit != nullptr)
@@ -343,7 +361,13 @@ void StudioEngine::loadEdit (const juce::File& file)
     {
         edit->getTransport().stop (false, true);
         PluginHost::closeAllWindows (*edit);
-        save();
+        if (! discardNextLoad)
+        {
+            save();
+            if (openSongId.isNotEmpty())
+                SongSafety::snapshot (getSongFile(), "closed");
+        }
+        discardNextLoad = false;
         edit.reset();
     }
 
@@ -367,6 +391,24 @@ void StudioEngine::loadEdit (const juce::File& file)
     if (isNew)
         createStarterLayout();
 
+    // Songs from earlier versions: the built-in guitar, percussion and balafon play through the sampler
+    // (Steps 30-31). They sound the same until their sound packs are downloaded.
+    upgradeBuiltInInstruments (*edit);
+
+    // Songs from earlier versions: "Instrument 6" becomes "Organ" (Step 26)
+    for (auto* t : te::getAudioTracks (*edit))
+    {
+        const auto n = t->getName();
+        if ((n.startsWith ("Instrument ") || n.startsWith ("Track ")) && n.fromFirstOccurrenceOf (" ", false, false).containsOnly ("0123456789"))
+        {
+            const auto id = getInstrumentId (*t);
+            if (id.isNotEmpty() && id != "plugin")
+                nameAfterInstrument (*t, trackNameFor (id));
+            else if (auto* p = getInstrumentPlugin (*t))
+                nameAfterInstrument (*t, p->getName());
+        }
+    }
+
     assignInputs();
 
     // Shared reverb and delay, master meter (Step 12). Not something to undo.
@@ -387,10 +429,113 @@ void StudioEngine::prepareKeysTrack()
     if (track == nullptr)
         return;
 
-    if (track->getName() != "Keys")
-        track->setName ("Keys");
-
+    // Name it only when it is new: a name you gave the first track stays
+    const auto isNew = ! isInstrumentTrack (*track);
     addInstrument (*track);
+    if (isNew)
+        track->setName ("Piano");
+}
+
+int StudioEngine::upgradeBuiltInInstruments (te::Edit& e)
+{
+    int changed = 0;
+    for (auto* t : te::getAudioTracks (e))
+    {
+        auto* old = getInstrumentPlugin (*t);
+        juce::String id;
+        float volume = 0.0f;
+        if (auto* g = dynamic_cast<GuitarPlugin*> (old))
+        {
+            id = g->sound.get() == 1 ? "guitarNylon" : "guitar";
+            volume = g->volumeDb.get();
+        }
+        else if (auto* pc = dynamic_cast<PercussionPlugin*> (old))
+        {
+            id = pc->mode.get() == 1 ? "balafon" : "percussion";
+            volume = pc->volumeDb.get();
+        }
+        if (id.isEmpty())
+            continue;
+
+        const bool wasEnabled = old->isEnabled();
+        const int index = juce::jmax (0, t->pluginList.indexOf (old));
+        if (auto p = e.getPluginCache().createNewPlugin (SamplerPlugin::xmlTypeName, {}))
+        {
+            if (auto* s = dynamic_cast<SamplerPlugin*> (p.get()))
+            {
+                s->instrumentId = id;
+                s->volumeDb = volume;
+            }
+            p->setEnabled (wasEnabled);
+            old->deleteFromParent();
+            t->pluginList.insertPlugin (p, index, nullptr);
+            ++changed;
+        }
+    }
+    return changed;
+}
+
+juce::String StudioEngine::trackNameFor (const juce::String& id)
+{
+    if (id == "grand" || id == "grandFull" || id == "upright")  return "Piano";
+    if (id == "organ")                                         return "Organ";
+    if (id == "guitar" || id == "guitarNylon")                  return "Guitar";
+    if (id == "bassFinger" || id == "bassPick")                 return "Bass";
+    if (id == "drums")                                         return "Drums";
+    if (id == "percussion")                                    return "Percussion";
+    if (id == "balafon")                                       return "Balafon";
+    if (id == "mysounds")                                      return "My Sounds";
+    if (id == "studioKeys")                                    return "Keys";
+    if (auto* c = Instruments::find (id))                       return c->group;
+    return "Instrument";
+}
+
+bool StudioEngine::hasAutomaticName (te::Track& track)
+{
+    auto name = track.getName().trim();
+    // Strip a number on the end: "Organ 2" -> "Organ", "Instrument 6" -> "Instrument"
+    const auto lastWord = name.fromLastOccurrenceOf (" ", false, false);
+    if (lastWord.isNotEmpty() && lastWord.containsOnly ("0123456789") && name.contains (" "))
+        name = name.upToLastOccurrenceOf (" ", false, false).trim();
+
+    if (name.isEmpty())
+        return true;
+    for (auto* automatic : { "Piano", "Organ", "Guitar", "Bass", "Drums", "Percussion", "Balafon", "My Sounds",
+                             "Keys", "Instrument", "Track" })
+        if (name == automatic)
+            return true;
+
+    // Named after a plugin instrument: also automatic
+    if (auto* at = dynamic_cast<te::AudioTrack*> (&track))
+        if (auto* p = getInstrumentPlugin (*at))
+            if (p->getName().isNotEmpty() && name == p->getName())
+                return true;
+    return false;
+}
+
+juce::String StudioEngine::uniqueTrackName (te::Edit& e, const juce::String& base, const te::Track* except)
+{
+    auto taken = [&] (const juce::String& n)
+    {
+        for (auto* t : te::getAudioTracks (e))
+            if (t != except && t->getName().equalsIgnoreCase (n))
+                return true;
+        return false;
+    };
+    if (! taken (base))
+        return base;
+    for (int i = 2;; ++i)
+        if (! taken (base + " " + juce::String (i)))
+            return base + " " + juce::String (i);
+}
+
+void StudioEngine::nameAfterInstrument (te::AudioTrack& track, const juce::String& newName)
+{
+    if (! hasAutomaticName (track) || newName.isEmpty())
+        return;
+    const auto unique = uniqueTrackName (track.edit, newName, &track);
+    if (track.getName() != unique)
+        track.setName (unique);
 }
 
 void StudioEngine::addInstrument (te::AudioTrack& track, const juce::String& instrumentId)
@@ -436,6 +581,7 @@ te::Plugin* StudioEngine::setPluginInstrument (te::AudioTrack& track, const juce
         return nullptr;
 
     plugin->state.setProperty (gpsInstrumentFlag, true, nullptr);
+    nameAfterInstrument (track, desc.name);
     track.pluginList.insertPlugin (plugin, 0, nullptr);
     return plugin.get();
 }
@@ -452,12 +598,14 @@ te::Plugin* StudioEngine::addEffect (te::AudioTrack& track, te::Plugin::Ptr plug
     if (plugin == nullptr)
         return nullptr;
 
-    // After the instrument and the other effects, before the track's volume and meter
+    // After the instrument and the other effects, before the track's volume and meter.
+    // Vocal tuning goes first, so EQ, compression and reverb work on the tuned voice.
     int index = 0;
     const auto plugins = track.pluginList.getPlugins();
+    const auto tuning = dynamic_cast<VocalTunePlugin*> (plugin.get()) != nullptr;
     for (int i = 0; i < plugins.size(); ++i)
     {
-        if (isMixerPlugin (*plugins[i]))
+        if (isMixerPlugin (*plugins[i]) || (tuning && ! isInstrumentPlugin (*plugins[i])))
             break;
         index = i + 1;
     }
@@ -509,6 +657,8 @@ juce::String StudioEngine::getInstrumentId (te::AudioTrack& track)
     auto* p = getInstrumentPlugin (track);
     if (auto* s = dynamic_cast<SamplerPlugin*> (p)) return s->instrumentId.get();
     if (dynamic_cast<OrganPlugin*> (p) != nullptr)  return "organ";
+    if (auto* g = dynamic_cast<GuitarPlugin*> (p))    return g->sound.get() == 1 ? "guitarNylon" : "guitar";
+    if (auto* pc = dynamic_cast<PercussionPlugin*> (p)) return pc->mode.get() == 1 ? "balafon" : "percussion";
     if (dynamic_cast<StudioKeysPlugin*> (p) != nullptr) return "studioKeys";
     if (PluginHost::isPlugin (p))                     return "plugin";
     return {};
@@ -526,6 +676,10 @@ juce::String StudioEngine::describeInstrument (te::AudioTrack& track)
     }
     if (auto* o = dynamic_cast<OrganPlugin*> (p))
         return "Gospel Organ  " + o->getRegistration();
+    if (auto* g = dynamic_cast<GuitarPlugin*> (p))
+        return g->sound.get() == 1 ? "Nylon Guitar" : "Clean Electric Guitar";
+    if (auto* pc = dynamic_cast<PercussionPlugin*> (p))
+        return pc->mode.get() == 1 ? "Balafon" : "African Percussion";
     if (PluginHost::isPlugin (p))
         return PluginHost::describe (*p);
     return p->getName();
@@ -537,11 +691,25 @@ void StudioEngine::setInstrument (te::AudioTrack& track, const juce::String& ins
     if (choice == nullptr || edit == nullptr)
         return;
 
+    nameAfterInstrument (track, trackNameFor (instrumentId));
+
     // Same kind of instrument already there: just switch the sound
     if (auto* s = dynamic_cast<SamplerPlugin*> (getInstrumentPlugin (track)))
         if (choice->kind == Instruments::Kind::sampler)
         {
             s->instrumentId = instrumentId;
+            return;
+        }
+    if (auto* pc = dynamic_cast<PercussionPlugin*> (getInstrumentPlugin (track)))
+        if (choice->kind == Instruments::Kind::percussion)
+        {
+            pc->mode = instrumentId == "balafon" ? 1 : 0;
+            return;
+        }
+    if (auto* g = dynamic_cast<GuitarPlugin*> (getInstrumentPlugin (track)))
+        if (choice->kind == Instruments::Kind::guitar)
+        {
+            g->sound = instrumentId == "guitarNylon" ? 1 : 0;
             return;
         }
 
@@ -550,6 +718,8 @@ void StudioEngine::setInstrument (te::AudioTrack& track, const juce::String& ins
             p->deleteFromParent();
 
     const char* type = choice->kind == Instruments::Kind::organ   ? OrganPlugin::xmlTypeName
+                     : choice->kind == Instruments::Kind::guitar  ? GuitarPlugin::xmlTypeName
+                     : choice->kind == Instruments::Kind::percussion ? PercussionPlugin::xmlTypeName
                      : choice->kind == Instruments::Kind::sampler ? SamplerPlugin::xmlTypeName
                                                                   : StudioKeysPlugin::xmlTypeName;
 
@@ -557,6 +727,10 @@ void StudioEngine::setInstrument (te::AudioTrack& track, const juce::String& ins
     {
         if (auto* s = dynamic_cast<SamplerPlugin*> (plugin.get()))
             s->instrumentId = instrumentId;
+        if (auto* g = dynamic_cast<GuitarPlugin*> (plugin.get()))
+            g->sound = instrumentId == "guitarNylon" ? 1 : 0;
+        if (auto* pc = dynamic_cast<PercussionPlugin*> (plugin.get()))
+            pc->mode = instrumentId == "balafon" ? 1 : 0;
         track.pluginList.insertPlugin (plugin, 0, nullptr);
     }
 }
@@ -753,17 +927,69 @@ void StudioEngine::openSong (const Song& song, const juce::File& editFile)
         return;
     }
 
+    // A song file the app was saving when it stopped is repaired first (Step 43)
+    const auto repair = SongSafety::prepareSongFile (editFile);
     editFile.getParentDirectory().createDirectory();
     loadEdit (editFile);
     openSongId = song.id;
     applySongSettings (song);
+    if (edit != nullptr)
+    {
+        // Old harmony parts, stems, stretched copies and timing corrections nothing uses any more
+        const auto tidied = SongFiles::tidy (*edit);
+        if (tidied.files > 0)
+        {
+            const auto message = "Cleaned away " + juce::String (tidied.files) + (tidied.files == 1 ? " old file (" : " old files (")
+                               + SongFiles::describeSize (tidied.bytes) + " freed)";
+            auto aliveRef = alive;
+            juce::MessageManager::callAsync ([this, aliveRef, message] { if (aliveRef->load() && onTempoStatus) onTempoStatus (message); });
+            juce::Timer::callAfterDelay (6000, [this, aliveRef] { if (aliveRef->load() && onTempoStatus) onTempoStatus ({}); });
+        }
+
+        // Files left half-written when the app stopped suddenly (they are always written as .part first)
+        for (auto& f : editFile.getParentDirectory().findChildFiles (juce::File::findFiles, true, "*.part"))
+            f.deleteFile();
+    }
     save();
+
+    // A version of the song as it was opened, and the marker that says which song is open (Steps 43-44)
+    SongSafety::snapshot (editFile, "opened");
+    lastVersionMs = juce::Time::getMillisecondCounter();
+    SongSafety::Session::songOpened (song.id, editFile);
+    if (repair.message.isNotEmpty())
+    {
+        auto aliveRef = alive;
+        const auto message = repair.message;
+        juce::MessageManager::callAsync ([this, aliveRef, message] { if (aliveRef->load() && onTempoStatus) onTempoStatus (message); });
+        juce::Timer::callAfterDelay (15000, [this, aliveRef] { if (aliveRef->load() && onTempoStatus) onTempoStatus ({}); });
+    }
+}
+
+juce::File StudioEngine::getSongFile() const
+{
+    return edit != nullptr && openSongId.isNotEmpty() && edit->editFileRetriever ? edit->editFileRetriever() : juce::File();
+}
+
+void StudioEngine::discardSongWithoutSaving()
+{
+    discardNextLoad = true;
+    loadEdit (scratchFile);
+    openSongId = {};
+}
+
+void StudioEngine::songClosing()
+{
+    if (openSongId.isEmpty() || edit == nullptr)
+        return;
+    save();
+    SongSafety::snapshot (getSongFile(), "closed");
 }
 
 void StudioEngine::closeSong()
 {
     loadEdit (scratchFile);
     openSongId = {};
+    SongSafety::Session::songClosed();
 }
 
 void StudioEngine::save()
@@ -775,7 +1001,120 @@ void StudioEngine::save()
 void StudioEngine::autosaveIfChanged()
 {
     if (edit != nullptr && openSongId.isNotEmpty() && ! isRecording() && edit->hasChangedSinceSaved())
+    {
         save();
+        // A version every 10 minutes of work (only when something changed)
+        if (juce::Time::getMillisecondCounter() - lastVersionMs > 10u * 60u * 1000u)
+        {
+            SongSafety::snapshot (getSongFile(), "auto");
+            lastVersionMs = juce::Time::getMillisecondCounter();
+        }
+    }
+}
+
+//==============================================================================
+//  Recordings follow tempo changes (Step 23)
+//==============================================================================
+struct StudioEngine::TempoStretcher final : private juce::Timer
+{
+    explicit TempoStretcher (StudioEngine& e) : owner (e)    { startTimer (400); }
+    ~TempoStretcher() override
+    {
+        stopTimer();
+        generation->fetch_add (1);                     // a stretch still running stops; its result is ignored
+    }
+
+    void tempoChanged()
+    {
+        lastChange = juce::Time::getMillisecondCounter();
+        generation->fetch_add (1);                     // a job still running for the old tempo stops
+    }
+
+    void timerCallback() override
+    {
+        auto* edit = owner.getEdit();
+        if (edit == nullptr || running || ! owner.hasOpenSong())
+            return;
+        if (TempoFollow::getMode (*edit) != TempoFollow::Mode::stretch || TempoFollow::numWaiting (*edit) == 0)
+            return;
+        if (juce::Time::getMillisecondCounter() - lastChange < 1200)
+            return;                                    // wait until the tempo stops changing
+
+        auto jobs = std::make_shared<std::vector<TempoFollow::Job>> (TempoFollow::jobsFor (*edit));
+        if (jobs->empty()) return;
+        running = true;
+        const auto gen = generation->load();
+        const auto bpm = edit->tempoSequence.getTempoAt (te::TimePosition()).getBpm();
+        if (owner.onTempoStatus)
+            owner.onTempoStatus ("Stretching " + juce::String ((int) jobs->size()) + (jobs->size() == 1 ? " recording" : " recordings")
+                                 + " to " + juce::String (juce::roundToInt (bpm)) + " BPM...");
+
+        auto genRef = generation;
+        auto aliveRef = owner.alive;
+        te::SafeSelectable<te::Edit> safeEdit (*edit);
+        auto* self = this;
+        BackgroundWork::run ("Stretching recordings to the new tempo", [jobs, gen, genRef, aliveRef, safeEdit, self] (const std::atomic<bool>& stop)
+        {
+            auto keepGoing = [&] { return ! stop.load() && genRef->load() == gen; };
+            auto ok = std::make_shared<std::vector<bool>>();
+            for (auto& j : *jobs)
+                ok->push_back (keepGoing() && TempoFollow::render (j, keepGoing));
+            BackgroundWork::onMessageThread ([jobs, ok, gen, genRef, aliveRef, safeEdit, self]
+            {
+                if (! aliveRef->load()) return;
+                self->running = false;
+                auto* ed = safeEdit.get();
+                if (ed != nullptr && genRef->load() == gen)
+                {
+                    ed->getUndoManager().beginNewTransaction ("Recordings follow the tempo");
+                    for (size_t i = 0; i < jobs->size(); ++i)
+                        if ((*ok)[i]) TempoFollow::finish (*ed, (*jobs)[i]);
+                }
+                if (self->owner.onTempoStatus) self->owner.onTempoStatus ({});
+            });
+        });
+    }
+
+    StudioEngine& owner;
+    std::shared_ptr<std::atomic<int>> generation = std::make_shared<std::atomic<int>> (0);
+    juce::uint32 lastChange = 0;
+    bool running = false;
+};
+
+void StudioEngine::changeTempo (double bpm)
+{
+    if (edit == nullptr)
+        return;
+    if (tempoStretcher == nullptr)
+        tempoStretcher = std::make_unique<TempoStretcher> (*this);
+
+    const auto recordings = TempoFollow::recordings (*edit);
+    if (recordings.isEmpty())
+    {
+        if (auto* tempo = edit->tempoSequence.getTempo (0))
+            tempo->setBpm (bpm);
+        return;
+    }
+
+    const auto mode = TempoFollow::getMode (*edit);
+    if (mode != TempoFollow::Mode::keep)
+        TempoFollow::prepareForChange (*edit);
+    TempoFollow::setTempoKeepingRecordings (*edit, bpm);
+    tempoStretcher->tempoChanged();
+
+    if (mode == TempoFollow::Mode::keep)
+        TempoFollow::forget (*edit);
+    else if (mode == TempoFollow::Mode::ask && onAskTempoMode)
+        onAskTempoMode();
+}
+
+void StudioEngine::tempoModeChosen()
+{
+    if (edit == nullptr) return;
+    if (TempoFollow::getMode (*edit) == TempoFollow::Mode::keep)
+        TempoFollow::forget (*edit);
+    if (tempoStretcher != nullptr)
+        tempoStretcher->tempoChanged();
 }
 
 void StudioEngine::applySongSettings (const Song& song)
@@ -801,7 +1140,7 @@ void StudioEngine::applySongSettings (const Song& song)
         const auto bpm = song.getEngineBpm();
         if (std::abs (tempo->getBpm() - bpm) > 0.001)
         {
-            tempo->setBpm (bpm);
+            changeTempo (bpm);
             changed = true;
         }
     }
@@ -854,7 +1193,10 @@ void StudioEngine::stop()
         const auto wasRecording = t.isRecording();
         t.stop (false, false);
         if (wasRecording)
+        {
             save();
+            SongSafety::Session::recordingStopped();
+        }
     }
     else
     {
@@ -878,10 +1220,14 @@ void StudioEngine::toggleRecord()
                     if (! ac->getAutoCrossfade())
                         AudioEdit::prepare (*ac);
         save();
+        SongSafety::Session::recordingStopped();
     }
     else
     {
         recordStartSeconds = t.getPosition().inSeconds();
+        // Where a cut-off recording would go if the power went (Step 43)
+        const auto from = edit->recordingPunchInOut.get() ? t.getLoopRange().getStart().inSeconds() : recordStartSeconds;
+        SongSafety::Session::recordingStarted (getSongFile(), from);
         t.record (false);
     }
 }
@@ -1195,21 +1541,26 @@ void StudioEngine::setPunchEnabled (bool shouldPunch)
         edit->recordingPunchInOut = shouldPunch;
 }
 
+juce::File StudioEngine::copyIntoSong (const juce::File& file, const juce::String& subfolder)
+{
+    if (edit == nullptr || ! edit->editFileRetriever)
+        return file;
+    const auto songFolder = edit->editFileRetriever().getParentDirectory();
+    if (songFolder == juce::File() || file.isAChildOf (songFolder))
+        return file;
+    auto folder = songFolder.getChildFile (subfolder);
+    folder.createDirectory();
+    auto copy = folder.getNonexistentChildFile (file.getFileNameWithoutExtension(), file.getFileExtension(), false);
+    return file.copyFileTo (copy) ? copy : file;
+}
+
 te::Clip* StudioEngine::importAudio (te::AudioTrack& track, const juce::File& file, double startSeconds)
 {
     if (edit == nullptr || ! file.existsAsFile())
         return nullptr;
 
     // Keep a copy inside the song folder so the song never loses its audio
-    auto folder = edit->editFileRetriever ? edit->editFileRetriever().getParentDirectory().getChildFile ("Audio") : juce::File();
-    auto source = file;
-    if (folder != juce::File() && ! file.isAChildOf (folder.getParentDirectory()))
-    {
-        folder.createDirectory();
-        auto copy = folder.getNonexistentChildFile (file.getFileNameWithoutExtension(), file.getFileExtension(), false);
-        if (file.copyFileTo (copy))
-            source = copy;
-    }
+    const auto source = copyIntoSong (file, "Audio");
 
     const te::AudioFile audioFile (engine, source);
     if (! audioFile.isValid())
@@ -1221,4 +1572,56 @@ te::Clip* StudioEngine::importAudio (te::AudioTrack& track, const juce::File& fi
     if (clip != nullptr)
         AudioEdit::prepare (*clip);
     return clip.get();
+}
+
+//==============================================================================
+//  Recording delay correction (Step 28)
+//==============================================================================
+double StudioEngine::getRecordingCorrectionMs()
+{
+    for (auto* d : engine.getDeviceManager().getWaveInputDevices())
+        if (d != nullptr && ! d->isTrackDevice())
+            return d->getRecordAdjustmentMs();
+    return 0.0;
+}
+
+void StudioEngine::setRecordingCorrectionMs (double ms)
+{
+    for (auto* d : engine.getDeviceManager().getWaveInputDevices())
+        if (d != nullptr && ! d->isTrackDevice())
+            d->setRecordAdjustmentMs (ms);           // Tracktion keeps it with the device's settings
+}
+
+double StudioEngine::getReportedLatencyMs()
+{
+    return engine.getDeviceManager().getRecordAdjustmentMs();
+}
+
+void StudioEngine::prepareForLatencyCheck (bool starting)
+{
+    if (edit == nullptr)
+    {
+        setTestTone (false);
+        return;
+    }
+    if (starting)
+    {
+        if (isPlaying() || isRecording())
+            stop();
+        setTestTone (false);
+        monitorsBeforeCheck.clear();
+        for (auto* t : te::getAudioTracks (*edit))
+        {
+            monitorsBeforeCheck.push_back ({ t->itemID.toString(), getMonitorMode (*t) });
+            setMonitorMode (*t, te::InputDevice::MonitorMode::off);
+        }
+    }
+    else
+    {
+        for (auto& [id, mode] : monitorsBeforeCheck)
+            for (auto* t : te::getAudioTracks (*edit))
+                if (t->itemID.toString() == id)
+                    setMonitorMode (*t, mode);
+        monitorsBeforeCheck.clear();
+    }
 }

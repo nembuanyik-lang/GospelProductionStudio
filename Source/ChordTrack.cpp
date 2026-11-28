@@ -151,6 +151,8 @@ juce::String chordsToNotes (te::Edit& edit, const Theory::Key& key, const NotesO
     {
         te::AudioTrack* keys = findTrack (edit, "Keys", true);
         if (keys == nullptr)
+            keys = findTrack (edit, "Piano", true);
+        if (keys == nullptr)
             for (auto* t : te::getAudioTracks (edit))
                 if (keys == nullptr && StudioEngine::isInstrumentTrack (*t))
                     keys = t;

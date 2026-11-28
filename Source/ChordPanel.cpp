@@ -183,6 +183,7 @@ ChordPanel::ChordPanel (StudioEngine& e, TimelineView& t)
     }
 
     // Palette
+    paletteViewport.setComponentID ("chords.palette");
     paletteViewport.setViewedComponent (&paletteContent, false);
     paletteViewport.setScrollBarsShown (true, false);
     addAndMakeVisible (paletteViewport);
@@ -284,6 +285,7 @@ ChordPanel::ChordPanel (StudioEngine& e, TimelineView& t)
     for (auto* b : { &saveMineButton, &insertMineButton, &deleteMineButton }) { noFocus (*b); addChildComponent (b); }
 
     // Shared
+    lengthBox.setComponentID ("chords.length");
     lengthBox.addItemList (lengthNames, 1);
     lengthBox.setSelectedItemIndex (StudioEngine::getSetting ("chordLength", 2), juce::dontSendNotification);
     lengthBox.onChange = [this] { StudioEngine::setSetting ("chordLength", lengthBox.getSelectedItemIndex()); };

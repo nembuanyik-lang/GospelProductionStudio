@@ -9,6 +9,9 @@ SongEditor::SongEditor (SongLibrary& lib, MemoRecorder& rec)
 {
     auto dirtyOnText = [this] { markDirty(); };
 
+    titleEdit.setComponentID ("song.title");
+    keyBox.setComponentID ("song.key");
+    tempoSlider.setComponentID ("song.tempo");
     titleEdit.setFont (studioFont (24.0f, true));
     titleEdit.setTextToShowWhenEmpty ("Song title", StudioColours::textDim);
     titleEdit.onTextChange = dirtyOnText;

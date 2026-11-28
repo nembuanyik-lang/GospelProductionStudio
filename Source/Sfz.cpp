@@ -433,9 +433,40 @@ Library::~Library()
     instance = nullptr;
 }
 
-void Library::request (const juce::File& sfzFile, std::function<void (InstrumentPtr)> onLoaded)
+InstrumentPtr addMissingKeys (const InstrumentPtr& main, const InstrumentPtr& extra)
 {
-    const auto key = sfzFile.getFullPathName();
+    if (main == nullptr || extra == nullptr)
+        return main;
+    auto merged = std::make_shared<Instrument> (*main);
+    std::vector<int> moved (extra->samples.size(), -1);
+    for (const auto& r : extra->regions)
+    {
+        if (r.sampleIndex < 0 || r.sampleIndex >= (int) extra->samples.size())
+            continue;
+        bool covered = false;
+        for (const auto& m : main->regions)
+            if (r.lokey <= m.hikey && r.hikey >= m.lokey) { covered = true; break; }
+        if (covered)
+            continue;
+        auto& index = moved[(size_t) r.sampleIndex];
+        if (index < 0)
+        {
+            const auto& smp = extra->samples[(size_t) r.sampleIndex];
+            index = (int) merged->samples.size();
+            merged->samples.push_back (smp);
+            merged->memoryBytes += (juce::int64) smp.channels.size() * smp.length * (juce::int64) sizeof (juce::int16);
+        }
+        auto copy = r;
+        copy.sampleIndex = index;
+        merged->regions.push_back (copy);
+    }
+    return merged;
+}
+
+void Library::request (const juce::File& sfzFile, std::function<void (InstrumentPtr)> onLoaded, const juce::File& extra)
+{
+    const bool withExtra = extra.existsAsFile();
+    const auto key = sfzFile.getFullPathName() + (withExtra ? "|" + extra.getFullPathName() : juce::String());
     {
         const juce::ScopedLock sl (lock);
         if (auto existing = cache[key].lock())
@@ -450,9 +481,11 @@ void Library::request (const juce::File& sfzFile, std::function<void (Instrument
             return;     // already loading
     }
 
-    pool.addJob ([this, sfzFile, key]
+    pool.addJob ([this, sfzFile, key, extra, withExtra]
     {
         auto inst = load (sfzFile);
+        if (withExtra && inst != nullptr)
+            inst = addMissingKeys (inst, load (extra));
 
         std::vector<std::function<void (InstrumentPtr)>> callbacks;
         {
@@ -473,7 +506,15 @@ void Library::request (const juce::File& sfzFile, std::function<void (Instrument
 void Library::forget (const juce::File& sfzFile)
 {
     const juce::ScopedLock sl (lock);
-    cache.erase (sfzFile.getFullPathName());
+    const auto path = sfzFile.getFullPathName();
+    for (auto it = cache.begin(); it != cache.end();)
+    {
+        // Also the combined instruments (kit + percussion) that use this file
+        if (it->first == path || it->first.startsWith (path + "|") || it->first.endsWith ("|" + path))
+            it = cache.erase (it);
+        else
+            ++it;
+    }
 }
 
 juce::int64 Library::getMemoryInUse()

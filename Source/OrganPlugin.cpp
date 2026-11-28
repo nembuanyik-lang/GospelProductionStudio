@@ -294,9 +294,13 @@ void OrganPlugin::renderBlock (float* outL, float* outR, int num)
     const auto vibChorus = vibMode >= 4;
     const auto vibInc = 6.9 / sampleRate;
 
+    // Level into the "tube preamp": a big six-note chord on full drawbars reaches about 1.0,
+    // so the drive warms the sound instead of turning every chord into fuzz.
+    constexpr float preampLevel = 0.08f;
+    constexpr float outputLevel = 0.25f / 0.16f;     // a full chord peaks around -9 dB: room for the rest of the band
     const auto drv = aDrive.load();
-    const auto driveGain = 1.0f + drv * 7.0f;
-    const auto driveComp = 1.0f / std::tanh (driveGain * 0.5f) * 0.5f;
+    const auto driveGain = 1.0f + drv * 3.0f;
+    const auto driveNorm = 1.0f / std::tanh (driveGain);
 
     // Leslie speeds: the panel setting, or the mod wheel once it has moved
     const auto leslieMode = aLeslie.load();
@@ -381,9 +385,11 @@ void OrganPlugin::renderBlock (float* outL, float* outR, int num)
             s = vibChorus ? 0.5f * (s + wet) * 1.4f : wet;
         }
 
-        // Overdrive (the tube preamp)
+        // Overdrive (the tube preamp): gentle at low settings, growl on full chords when turned up
+        s *= preampLevel;
         if (drv > 0.001f)
-            s = std::tanh (s * driveGain * 0.5f) * driveComp * 2.0f;
+            s = std::tanh (s * driveGain) * driveNorm;
+        s *= outputLevel;
 
         // Leslie
         float l, r;

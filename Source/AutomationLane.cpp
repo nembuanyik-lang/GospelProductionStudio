@@ -113,7 +113,7 @@ void AutomationLane::paint (juce::Graphics& g)
     {
         const auto v = curve.getValueAt (xToTime (x, false), p->getCurrentBaseValue());
         const auto y = valueToY (v);
-        if (x == 0.0f) { path.startNewSubPath (x, y); fill.startNewSubPath (x, bottom); }
+        if (juce::exactlyEqual (x, 0.0f)) { path.startNewSubPath (x, y); fill.startNewSubPath (x, bottom); }
         path.lineTo (x, y);
         fill.lineTo (x, y);
     }
@@ -269,11 +269,11 @@ void AutomationLane::showMenu()
             return;
         if (r == 1)
         {
-            if (auto* p = safe->param())
+            if (auto* lineParam = safe->param())
             {
                 auto& um = safe->track.edit.getUndoManager();
                 um.beginNewTransaction();
-                p->getCurve().clear (&um);
+                lineParam->getCurve().clear (&um);
                 safe->repaint();
             }
         }

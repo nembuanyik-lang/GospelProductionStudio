@@ -2,6 +2,7 @@
 #include "StudioEngine.h"
 #include "StudioLookAndFeel.h"
 #include "Mixing.h"
+#include "MasterPlugin.h"
 
 namespace PluginHost
 {
@@ -137,6 +138,14 @@ juce::String describe (te::Plugin& p)
 
 void showWindow (te::Plugin& p)
 {
+    // Mastering has its own page
+    if (dynamic_cast<MasterPlugin*> (&p) != nullptr)
+    {
+        if (MasterPlugin::onOpenRequest != nullptr)
+            MasterPlugin::onOpenRequest();
+        return;
+    }
+
     if (auto* ep = dynamic_cast<te::ExternalPlugin*> (&p))
     {
         if (ep->isInitialisingAsync())
@@ -189,8 +198,9 @@ namespace
             recreateEditor();
             setBoundsConstrained (getLocalBounds() + plugin.windowState->choosePositionForPluginWindow());
 
-           #if JUCE_LINUX
+            // Stay in front of the (maximised) main window
             setAlwaysOnTop (true);
+           #if JUCE_LINUX
             addToDesktop();
            #endif
             updateStoredBounds = true;
@@ -800,7 +810,7 @@ namespace
 
             auto screen = juce::Rectangle<int> (0, 0, 1366, 768);
             if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
-                screen = d->userArea;
+                screen = d->userBounds.toNearestIntEdges();
             setResizable (true, false);
             setResizeLimits (560, 360, 3000, 2000);
             centreWithSize (juce::jmin (780, screen.getWidth() - 40), juce::jmin (560, screen.getHeight() - 60));
@@ -813,8 +823,18 @@ namespace
     std::unique_ptr<PluginsWindow> managerWindow;
 }
 
+std::unique_ptr<juce::Component> createManagerComponent (te::Engine& engine)
+{
+    return std::make_unique<PluginsComponent> (engine);
+}
+
 void openManager (te::Engine& engine)
 {
+    if (onOpenManagerRequest != nullptr)
+    {
+        onOpenManagerRequest();
+        return;
+    }
     if (managerWindow == nullptr)
         managerWindow = std::make_unique<PluginsWindow> (engine);
     managerWindow->toFront (true);

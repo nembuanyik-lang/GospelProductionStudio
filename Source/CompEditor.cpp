@@ -1,4 +1,5 @@
 #include "CompEditor.h"
+#include "BackgroundWork.h"
 #include "Takes.h"
 
 namespace
@@ -196,10 +197,10 @@ void CompEditor::makeComp()
     repaint();
 
     auto flag = alive;
-    juce::Thread::launch ([this, flag, files, segs, xf, out]
+    BackgroundWork::run ("Making the comp", [this, flag, files, segs, xf, out] (const std::atomic<bool>&)
     {
         const auto result = Comp::render (files, segs, xf, out);
-        juce::MessageManager::callAsync ([this, flag, result, out]
+        BackgroundWork::onMessageThread ([this, flag, result, out]
         {
             if (! flag->load())
                 return;

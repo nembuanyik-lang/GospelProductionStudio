@@ -51,6 +51,22 @@ namespace Grooves
                 { rim,       "----x-------x---" },
                 { ride,      "o-o-o-o-o-o-o-o-" } } },
 
+            { "Gospel 16ths (ghost notes)", "4/4", 4, 4, 4, {
+                { kick,      "x--x--x---x--x--" },
+                { snare,     "--g-X--g-gg-X--g" },
+                { closedHat, "xoxoxoxoxoxoxoxo" } } },
+
+            { "Praise shuffle",           "4/4", 4, 4, 3, {
+                { kick,      "x-----x-x---" },
+                { snare,     "---X-g---X-g" },
+                { closedHat, "x-ox-ox-ox-o" } } },
+
+            { "Church shuffle (fast)",    "4/4", 4, 4, 3, {
+                { kick,      "x--x--x--x--" },
+                { snare,     "---X-g---X-g" },
+                { ride,      "x-xx-xx-xx-x" },
+                { pedalHat,  "---x-----x--" } } },
+
             { "Fill: toms (1 bar)",       "4/4", 4, 4, 4, {
                 { snare,     "x-x-x-x---------" },
                 { highTom,   "--------xx------" },
@@ -58,6 +74,133 @@ namespace Grooves
                 { lowTom,    "------------xx--" },
                 { floorTom,  "--------------xx" },
                 { kick,      "x-------x-------" } } },
+
+            // ---- Cameroon (4/4) ------------------------------------------------
+            { "Makossa (classic)",        "Cameroon", 4, 4, 4, {
+                { kick,      "x-----x-x--x----" },
+                { snare,     "----X-------X---" },
+                { closedHat, "XoxoXoxoXoxoXoxo" },
+                { congaMute, "--x---x---x---x-" },
+                { congaOpen, "---x----x--x---x" } } },
+
+            { "Makossa (modern dance)",   "Cameroon", 4, 4, 4, {
+                { kick,      "x---x---x---x---" },
+                { snare,     "----X-------X---" },
+                { openHat,   "--x---x---x---x-" },
+                { shaker,    "xoxoxoxoxoxoxoxo" },
+                { congaOpen, "---x--x----x--x-" } } },
+
+            { "Assiko (Bassa, bottle)",   "Cameroon", 4, 4, 4, {
+                { kick,      "x---x---x---x---" },
+                { snare,     "----x-------x---" },
+                { claves,    "x-xxx-xxx-xxx-xx" },
+                { shaker,    "xoxoxoxoxoxoxoxo" } } },
+
+            { "Bend skin",                "Cameroon", 4, 4, 4, {
+                { kick,      "x---x---x---x---" },
+                { snare,     "----X--g----X--g" },
+                { tambourine, "--x---x---x---x-" },
+                { cabasa,    "oooooooooooooooo" },
+                { congaOpen, "x--x--x---x-x---" } } },
+
+            { "Mangambeu (Bamileke)",     "Cameroon", 4, 4, 4, {
+                { kick,      "x-----x-x-----x-" },
+                { snare,     "----x-------x---" },
+                { shaker,    "x-xxx-xxx-xxx-xx" },
+                { bellHigh,  "x--x--x---x-x---" },
+                { congaOpen, "--x--x----x--x--" } } },
+
+            // ---- Cameroon (6/8 and 12/8) ---------------------------------------
+            { "Bikutsi (6/8, fast)",      "Cameroon", 6, 8, 2, {
+                { kick,      "x-----x-----" },
+                { snare,     "----x-----x-" },
+                { closedHat, "X-x-x-X-x-x-" },
+                { claves,    "x-xx-xx-xx-x" },
+                { shaker,    "xoxoxoxoxoxo" } } },
+
+            { "Njang (North-West, 12/8)", "Cameroon", 12, 8, 1, {
+                { bellLow,   "x-x-xx-x-x-x" },
+                { shaker,    "xoxxoxxoxxox" },
+                { djembeBass, "x-----x-----" },
+                { djembeTone, "---x-----xx-" },
+                { djembeSlap, "-----x-----x" },
+                { talkLow,   "x--------x--" } } },
+
+            // ---- West Africa and Nigeria -----------------------------------------
+            { "Highlife (Ghana classic)", "West Africa", 4, 4, 4, {
+                { kick,      "x-------x-x-----" },
+                { snare,     "----x-------x---" },
+                { bellHigh,  "x-x-xx-x-x-xx-x-" },
+                { congaOpen, "---x--x----x--x-" },
+                { shaker,    "xoxoxoxoxoxoxoxo" } } },
+
+            { "Ghana praise (kpanlogo feel)", "West Africa", 4, 4, 4, {
+                { kick,      "x-------x-------" },
+                { snare,     "----X-------X---" },
+                { bellHigh,  "x--x--x---x-x---" },
+                { congaOpen, "--xx--x---xx--x-" },
+                { congaMute, "x---x---x---x---" },
+                { shaker,    "oxoxoxoxoxoxoxox" } } },
+
+            { "Afrobeat",                 "West Africa", 4, 4, 4, {
+                { kick,      "x-----x---x-----" },
+                { snare,     "----X-------X--g" },
+                { closedHat, "x-xxx-xxx-xxx-xx" },
+                { shaker,    "xoxoxoxoxoxoxoxo" },
+                { cowbell,   "x--x--x---x-x---" },
+                { congaOpen, "---x--x----x--x-" },
+                { congaMute, "x-------x-------" } } },
+
+            { "Nigerian praise (Igbo, ogene)", "West Africa", 4, 4, 4, {
+                { kick,      "x---x---x---x---" },
+                { snare,     "----x-------x---" },
+                { bellLow,   "x-x-x-xxx-x-x-xx" },
+                { shaker,    "xoxoxoxoxoxoxoxo" },
+                { congaOpen, "--xx--xx--xx--xx" } } },
+
+            { "Yoruba praise (talking drum)", "West Africa", 4, 4, 4, {
+                { kick,      "x-----x-x-------" },
+                { snare,     "----X-------X---" },
+                { talkHigh,  "x--x--x---x-x---" },
+                { talkLow,   "x-------x-------" },
+                { talkRise,  "-------x--------" },
+                { talkFall,  "--------------x-" },
+                { shaker,    "xoxoxoxoxoxoxoxo" } } },
+
+            // ---- Central Africa --------------------------------------------------
+            { "Soukous / Ndombolo",       "Central Africa", 4, 4, 4, {
+                { kick,      "x---x---x---x---" },
+                { snare,     "----X--x----X-x-" },
+                { closedHat, "xoxoxoxoxoxoxoxo" },
+                { congaOpen, "--x---x---x---x-" },
+                { shaker,    "oooooooooooooooo" } } },
+
+            { "Rumba congolaise",         "Central Africa", 4, 4, 4, {
+                { kick,      "x-----x-x-----x-" },
+                { claves,    "x--x--x---x-x---" },
+                { congaMute, "x---x---x---x---" },
+                { congaOpen, "------xx------xx" },
+                { closedHat, "x-x-x-x-x-x-x-x-" } } },
+
+            // ---- African worship (12/8) and fills --------------------------------
+            { "African 12/8 worship (bell)", "West Africa", 12, 8, 1, {
+                { kick,      "x-----x-----" },
+                { bellHigh,  "x-x-xx-x-x-x" },
+                { cabasa,    "o-oo-oo-oo-o" },
+                { djembeBass, "x-----x-----" },
+                { djembeTone, "--x--x--x--x" } } },
+
+            { "Fill: djembe and talking drum", "Fill", 4, 4, 4, {
+                { djembeBass, "x---------------" },
+                { djembeSlap, "x-x-x-x---------" },
+                { djembeTone, "--------xx-x----" },
+                { talkFall,  "------------x---" },
+                { talkRise,  "--------------x-" } } },
+
+            { "Fill: congas",             "Fill", 4, 4, 4, {
+                { congaOpen, "x-x-x-x-xxxx----" },
+                { congaLow,  "------------xxxx" },
+                { congaMute, "-x-x-x-x--------" } } },
 
             // ---- 6/8 and 12/8 --------------------------------------------------
             { "6/8 gospel ballad",        "6/8", 6, 8, 2, {
@@ -70,12 +213,32 @@ namespace Grooves
                 { snare,     "----x-----x-" },
                 { closedHat, "X-x-x-X-x-x-" } } },
 
+            { "6/8 worship (driving)",    "6/8", 6, 8, 2, {
+                { kick,      "x-----x-x---" },
+                { snare,     "------X-----" },
+                { closedHat, "x-o-o-x-o-o-" },
+                { crash,     "x-----------" } } },
+
             { "12/8 slow gospel",         "12/8", 12, 8, 1, {
                 { kick,      "x-----x-----" },
                 { snare,     "---X-----X--" },
                 { closedHat, "Xxxxxxxxxxxx" } } },
         };
         return list;
+    }
+
+    const Groove* find (const juce::String& name)
+    {
+        for (auto& g : all())
+            if (name == g.name) return &g;
+        return nullptr;
+    }
+
+    bool usesPercussion (const Groove& g)
+    {
+        for (auto& l : g.lanes)
+            if (l.note == clap || (l.note >= tambourine && l.note != crash && l.note != ride && l.note != rideBell && l.note != 51)) return true;
+        return false;
     }
 
     bool fits (const Groove& g, int numerator, int denominator)

@@ -1,4 +1,5 @@
 #include "SamplerPlugin.h"
+#include "MySounds.h"
 
 const char* SamplerPlugin::xmlTypeName = "GospelSampler";
 
@@ -48,7 +49,7 @@ juce::String SamplerPlugin::getStatusText() const
     switch (status)
     {
         case Status::loading:      return "loading";
-        case Status::notInstalled: return "not downloaded";
+        case Status::notInstalled: return hasBuiltInSound() ? "built-in sound" : "not downloaded";
         case Status::failed:       return "could not load";
         case Status::ready:        break;
     }
@@ -73,7 +74,36 @@ void SamplerPlugin::valueTreePropertyChanged (juce::ValueTree& v, const juce::Id
             reloadInstrument();
         refreshSettings();
     }
+    else if (MySounds::isSlotTree (v) && isMySounds())
+    {
+        // Several changes often come together (key and mode): reload once
+        if (! reloadPending)
+        {
+            reloadPending = true;
+            auto flag = alive;
+            juce::MessageManager::callAsync ([flag, this]
+            {
+                if (! flag->load()) return;
+                reloadPending = false;
+                reloadInstrument();
+            });
+        }
+    }
     te::Plugin::valueTreePropertyChanged (v, id);
+}
+
+void SamplerPlugin::valueTreeChildAdded (juce::ValueTree& parent, juce::ValueTree& child)
+{
+    if (MySounds::isSlotTree (child) && isMySounds())
+        reloadInstrument();
+    te::Plugin::valueTreeChildAdded (parent, child);
+}
+
+void SamplerPlugin::valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int index)
+{
+    if (MySounds::isSlotTree (child) && isMySounds())
+        reloadInstrument();
+    te::Plugin::valueTreeChildRemoved (parent, child, index);
 }
 
 void SamplerPlugin::refreshSettings()
@@ -82,6 +112,18 @@ void SamplerPlugin::refreshSettings()
     toneAmount = juce::jlimit (0.0f, 1.0f, tone.get());
     releaseMul = juce::jlimit (0.1f, 4.0f, releaseScale.get());
     touchMode = juce::jlimit (0, 2, touch.get());
+    drumKit = instrumentId.get() == "drums";
+    const auto id = instrumentId.get();
+    guitarSound = id == "guitar" ? 0 : id == "guitarNylon" ? 1 : -1;
+    percussionMode = id == "percussion" ? 0 : id == "balafon" ? 1 : -1;
+}
+
+bool SamplerPlugin::kitHasNote (int note) const
+{
+    if (const auto* inst = instrument.get())
+        for (const auto& r : inst->regions)
+            if (note >= r.lokey && note <= r.hikey) return true;
+    return false;
 }
 
 void SamplerPlugin::reloadInstrument()
@@ -100,6 +142,32 @@ void SamplerPlugin::reloadInstrument()
         }
         old.reset();    // freed here, on the message thread
     };
+
+    userKit = isMySounds();
+    if (isMySounds())
+    {
+        const auto sfz = MySounds::writeSfz (state);
+        if (! sfz.existsAsFile())
+        {
+            status = Status::ready;       // nothing added yet: silent
+            setInstrument (nullptr);
+            changed();
+            return;
+        }
+        status = Status::loading;
+        changed();
+        auto flag = alive;
+        auto* self = this;
+        Sfz::Library::getInstance().request (sfz, [flag, self, generation, setInstrument] (Sfz::InstrumentPtr inst)
+        {
+            if (! flag->load() || generation != self->loadGeneration)
+                return;
+            setInstrument (inst);
+            self->status = inst != nullptr ? Status::ready : Status::failed;
+            self->changed();
+        });
+        return;
+    }
 
     if (choice == nullptr || choice->kind != Instruments::Kind::sampler)
     {
@@ -124,6 +192,9 @@ void SamplerPlugin::reloadInstrument()
     // (never keep it alive, its song may have been closed meanwhile).
     auto flag = alive;
     auto* self = this;
+    // The Drum Kit plays the recorded African percussion for notes it has no sample for (Step 32)
+    const auto extra = instrumentId.get() == "drums" ? SoundPacks::findInstrument ("percussion-african", "Percussion.sfz") : juce::File();
+
     Sfz::Library::getInstance().request (file, [flag, self, generation, setInstrument] (Sfz::InstrumentPtr inst)
     {
         if (! flag->load() || generation != self->loadGeneration)
@@ -132,7 +203,7 @@ void SamplerPlugin::reloadInstrument()
         setInstrument (inst);
         self->status = inst != nullptr ? Status::ready : Status::failed;
         self->changed();
-    });
+    }, extra);
 }
 
 //==============================================================================
@@ -140,7 +211,10 @@ void SamplerPlugin::initialise (const te::PluginInitialisationInfo& info)
 {
     sampleRate = info.sampleRate;
     fallback.setCurrentPlaybackSampleRate (sampleRate);
+    guitarFallback.prepare (sampleRate);
     midi.ensureSize (8192);
+    percussion.prepare (sampleRate);
+    percHits.reserve (256);
 }
 
 void SamplerPlugin::reset()
@@ -148,7 +222,9 @@ void SamplerPlugin::reset()
     for (auto& v : voices)
         v.active = false;
     fallback.allNotesOff (0, false);
+    guitarFallback.reset();
     pedalDown = false;
+    percussion.reset();
 }
 
 SamplerPlugin::Voice* SamplerPlugin::findFreeVoice()
@@ -386,8 +462,12 @@ void SamplerPlugin::applyToBuffer (const te::PluginRenderContext& fc)
         for (auto& v : voices)
             v.active = false;
 
-    const bool useFallback = instrument == nullptr;
+    const bool useFallback = instrument == nullptr && ! userKit.load();
+    const bool kit = drumKit.load();
+    const int percMode = percussionMode.load();
+    const bool hybrid = kit || percMode >= 0;
     midi.clear();
+    percHits.clear();
 
     // Split the block at each MIDI event
     int pos = 0;
@@ -409,11 +489,21 @@ void SamplerPlugin::applyToBuffer (const te::PluginRenderContext& fc)
                 if (v.active) releaseVoice (v);
             pedalDown = false;
             fallback.allNotesOff (0, true);
+            guitarFallback.allNotesOff();
         }
 
         for (auto& m : *fc.bufferForMidiMessages)
         {
             const auto offset = juce::jlimit (0, juce::jmax (0, num - 1), juce::roundToInt (m.getTimeStamp() * sampleRate));
+
+            const bool toSynth = kit ? Percussion::handles (m.getNoteNumber()) && ! kitHasNote (m.getNoteNumber())
+                                     : percMode >= 0 && (useFallback || ! kitHasNote (m.getNoteNumber()));
+            if (hybrid && (m.isNoteOn() || m.isNoteOff()) && toSynth)
+            {
+                if (m.isNoteOn() && percHits.size() < 256)
+                    percHits.push_back ({ offset, m.getNoteNumber(), m.getFloatVelocity() });
+                continue;
+            }
 
             if (useFallback)
             {
@@ -447,10 +537,53 @@ void SamplerPlugin::applyToBuffer (const te::PluginRenderContext& fc)
         }
     }
 
+    // African percussion for the Drum Kit (added after the kit's own tone control)
+    auto addPercussion = [&]
+    {
+        if (! hybrid) return;
+        auto* l = buffer.getWritePointer (0, fc.bufferStartSample);
+        auto* r = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1, fc.bufferStartSample) : nullptr;
+        std::array<float, 512> spare {};
+        percussion.gain = gain.load() * (kit ? 0.7f : 1.0f);   // under the kit it sits back, like real hand percussion
+        percussion.balafon = percMode == 1;
+        int p = 0;
+        auto renderPercTo = [&] (int until)
+        {
+            while (p < until)
+            {
+                const int n = juce::jmin (until - p, (int) spare.size());
+                if (r != nullptr) percussion.render (l + p, r + p, n);
+                else { std::fill (spare.begin(), spare.begin() + n, 0.0f); percussion.render (l + p, spare.data(), n); }
+                p += n;
+            }
+        };
+        for (auto& h : percHits)
+        {
+            renderPercTo (h.offset);
+            percussion.noteOn (h.note, h.velocity);
+        }
+        renderPercTo (num);
+    };
+
+    if (useFallback && guitarSound.load() >= 0)
+    {
+        renderGuitarFallback (buffer, fc.bufferStartSample, num);
+        sampleClock += (juce::uint64) num;
+        return;
+    }
+
+    if (useFallback && percMode >= 0)
+    {
+        sampleClock += (juce::uint64) num;
+        addPercussion();
+        return;
+    }
+
     if (useFallback)
     {
         fallback.renderNextBlock (buffer, midi, fc.bufferStartSample, num);
         sampleClock += (juce::uint64) num;
+        addPercussion();
         return;
     }
 
@@ -475,4 +608,38 @@ void SamplerPlugin::applyToBuffer (const te::PluginRenderContext& fc)
         l[i] *= g;
         if (r != nullptr) r[i] *= g;
     }
+    addPercussion();
+}
+
+//==============================================================================
+//  Guitars before the guitar pack is downloaded: the built-in plucked strings
+//==============================================================================
+void SamplerPlugin::renderGuitarFallback (juce::AudioBuffer<float>& buffer, int start, int num)
+{
+    guitarFallback.sound = guitarSound.load();
+    guitarFallback.volumeDb = juce::Decibels::gainToDecibels (gain.load());
+
+    auto* l = buffer.getWritePointer (0, start);
+    auto* r = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1, start) : nullptr;
+    std::array<float, 256> spare {};
+    auto renderTo = [&] (int& p, int until)
+    {
+        while (p < until)
+        {
+            const int n = r != nullptr ? until - p : juce::jmin (until - p, (int) spare.size());
+            guitarFallback.render (l + p, r != nullptr ? r + p : spare.data(), n);
+            p += n;
+        }
+    };
+
+    int p = 0;
+    for (const auto m : midi)
+    {
+        renderTo (p, juce::jlimit (0, num, m.samplePosition - start));
+        const auto msg = m.getMessage();
+        if (msg.isNoteOn())                                  guitarFallback.noteOn (msg.getNoteNumber(), msg.getFloatVelocity());
+        else if (msg.isNoteOff())                            guitarFallback.noteOff (msg.getNoteNumber());
+        else if (msg.isAllNotesOff() || msg.isAllSoundOff()) guitarFallback.allNotesOff();
+    }
+    renderTo (p, num);
 }
