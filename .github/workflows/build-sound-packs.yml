@@ -1,7 +1,7 @@
 name: Build sound packs
 
 # Run once from the GitHub "Actions" tab: choose this workflow, then "Run workflow".
-# It downloads the free piano, bass and drum libraries ON GITHUB'S SERVERS,
+# It downloads the free piano, bass, drum, guitar and percussion libraries ON GITHUB'S SERVERS,
 # makes compact packs and publishes them as the release "sounds-v1".
 # The app's Sound Library downloads each pack from there, once.
 on:
@@ -25,6 +25,8 @@ jobs:
           sudo apt-get install -y p7zip-full ffmpeg
 
       - name: Build the sound packs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}      # to list the VCSL files (percussion) without limits
         run: python3 tools/make_sound_packs.py --out dist
 
       - name: Publish release "sounds-v1"
@@ -38,6 +40,9 @@ jobs:
             Upright Piano: Upright Piano KW, FreePats (CC0).
             Electric Bass: samples by Andrea Biasior, FreePats (CC0).
             Drum Kit: MuldjordKit by Lars Muldjord / DrumGizmo team, FreePats (CC-BY 4.0).
+            Clean Electric Guitar: FSBS Electric Guitar Clean #1, FreePats (CC0).
+            Nylon Guitar: Spanish Classical Guitar by Roberto, FreePats (CC0).
+            African Percussion and Balafon: Versilian Community Sample Library by Versilian Studios (CC0).
           prerelease: true
           make_latest: false
           files: dist/*

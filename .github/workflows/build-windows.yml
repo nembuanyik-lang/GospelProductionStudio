@@ -1,0 +1,148 @@
+name: Build Windows Installer
+
+# Run from the GitHub "Actions" tab: choose this workflow, then "Run workflow".
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Get project files
+        uses: actions/checkout@v4
+
+      - name: Read version from CMakeLists.txt
+        id: version
+        shell: pwsh
+        run: |
+          $m = Select-String -Path CMakeLists.txt -Pattern 'project\(GospelProductionStudio VERSION ([0-9.]+)'
+          $v = $m.Matches[0].Groups[1].Value
+          "number=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Version $v"
+
+      - name: Download Tracktion Engine and JUCE (tested version)
+        shell: bash
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git init -q libs/tracktion_engine
+          cd libs/tracktion_engine
+          git remote add origin https://github.com/Tracktion/tracktion_engine.git
+          git fetch -q --depth 1 origin be4a6a0c94cc59ebe6f7a0a02373567cb2c01cfb
+          git checkout -q FETCH_HEAD
+          git submodule update --init --depth 1
+
+      - name: Download the ASIO SDK (low-latency audio interfaces)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $zip = "$env:RUNNER_TEMP\asiosdk.zip"
+          $dir = "$env:RUNNER_TEMP\asiosdk"
+          Invoke-WebRequest -Uri "https://www.steinberg.net/asiosdk" -OutFile $zip -MaximumRedirection 10 -UserAgent "Mozilla/5.0"
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          $header = Get-ChildItem -Path $dir -Recurse -Filter iasiodrv.h | Select-Object -First 1
+          if ($null -eq $header) { throw "iasiodrv.h not found in the ASIO SDK download" }
+          $root = $header.Directory.Parent.FullName
+          New-Item -ItemType Directory -Force -Path libs | Out-Null
+          Copy-Item -Path $root -Destination libs\asiosdk -Recurse -Force
+          Get-ChildItem libs\asiosdk\common | Select-Object Name
+          Write-Host "ASIO SDK ready: ASIO will be switched on"
+
+      - name: Install the MP3 encoder (LAME)
+        continue-on-error: true
+        run: vcpkg install mp3lame:x64-windows-static
+
+      # Step 32: the feel of real drummers, measured from the Groove MIDI Dataset
+      # (Google LLC, CC BY 4.0). If the download fails the app still builds, without the real-drummer feels.
+      - name: Real-drummer feel (Groove MIDI Dataset)
+        shell: bash
+        run: python tools/make_feel.py --out Source/RealFeel.cpp
+
+      - name: Configure
+        run: cmake -S . -B build -A x64 -DGPS_BUILD_NUMBER=${{ github.run_number }} -DGPS_UPDATE_REPO=${{ github.repository }} -DGPS_LAME_ROOT="$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static"
+
+      - name: Build (Release)
+        run: cmake --build build --config Release --parallel
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Make installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.version.outputs.number }}" installer\GospelProductionStudio.iss
+          Get-ChildItem dist
+
+      - name: Keep installer as a download
+        uses: actions/upload-artifact@v4
+        with:
+          name: GospelProductionStudio-Setup-${{ steps.version.outputs.number }}
+          path: dist/*.exe
+
+      # Step 27: the automatic tests run on Windows before anything is published.
+      # A failed check gives a red mark and the Release is not published (so the app's
+      # "Updates" button never offers it). The installer above can still be downloaded
+      # from this run's page for checking.
+      - name: Run the automatic tests
+        timeout-minutes: 45
+        shell: pwsh
+        run: |
+          $dir = "$env:RUNNER_TEMP\gps-tests"
+          $exe = "build\GospelProductionStudio_artefacts\Release\Gospel Production Studio.exe"
+          $p = Start-Process -FilePath $exe -ArgumentList "--render-test `"$dir`"" -Wait -PassThru
+          $results = Join-Path $dir "test-results.txt"
+          if (-not (Test-Path $results)) {
+            "## Automatic tests: did not start" >> $env:GITHUB_STEP_SUMMARY
+            throw "The tests did not start (no test-results.txt)"
+          }
+          Copy-Item $results test-results.txt
+          $lines = Get-Content $results
+          $lines | Write-Host
+          $summary = $lines | Where-Object { $_ -like 'Summary:*' } | Select-Object -Last 1
+          $failed = @($lines | Where-Object { $_ -like '*FAILED*' -and $_ -notlike 'Summary:*' })
+
+          if (-not $summary) {
+            "## Automatic tests: stopped part-way" >> $env:GITHUB_STEP_SUMMARY
+            "The app stopped before the tests finished (exit code $($p.ExitCode)). Last lines:" >> $env:GITHUB_STEP_SUMMARY
+            '```' >> $env:GITHUB_STEP_SUMMARY
+            $lines | Select-Object -Last 15 >> $env:GITHUB_STEP_SUMMARY
+            '```' >> $env:GITHUB_STEP_SUMMARY
+            throw "The tests stopped part-way (the app may have crashed)"
+          }
+
+          if ($failed.Count -eq 0 -and $p.ExitCode -eq 0) {
+            "## Automatic tests passed" >> $env:GITHUB_STEP_SUMMARY
+            "$summary" >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            "## Automatic tests FAILED" >> $env:GITHUB_STEP_SUMMARY
+            "$summary" >> $env:GITHUB_STEP_SUMMARY
+            '```' >> $env:GITHUB_STEP_SUMMARY
+            $failed >> $env:GITHUB_STEP_SUMMARY
+            '```' >> $env:GITHUB_STEP_SUMMARY
+            throw "$($failed.Count) test(s) failed: the Release will not be published"
+          }
+
+      - name: Keep the test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ steps.version.outputs.number }}
+          path: test-results.txt
+          if-no-files-found: ignore
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.number }}-build${{ github.run_number }}
+          name: Gospel Production Studio ${{ steps.version.outputs.number }} (build ${{ github.run_number }})
+          make_latest: true
+          body: |
+            All automatic tests passed on Windows for this build.
+            Real-drummer feels and grooves: Groove MIDI Dataset by Google LLC (Magenta), CC BY 4.0.
+            Free software under the GNU AGPL v3: source code in this repository; credits in NOTICES.md.
+            Download GospelProductionStudio-Setup-${{ steps.version.outputs.number }}.exe below, run it, then work through the test checklist in README.md.
+          files: dist/*.exe
