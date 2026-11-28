@@ -371,7 +371,7 @@ namespace ChordDetect
         }
         float mean = 0.0f;
         for (auto v : flux) mean += v;
-        mean /= (float) juce::jmax<size_t> (1, flux.size());
+        mean /= (float) std::max<size_t> (1, flux.size());
         for (auto& v : flux) v = juce::jmax (0.0f, v - mean);
 
         const double frameRate = sr / hop;

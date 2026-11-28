@@ -454,21 +454,21 @@ namespace Backing
                     default:      // guitar
                     {
                         auto shape = guitarShape (c, key);
-                        if (sym == 'U') { velocity = 74; return std::vector<int> (shape.end() - juce::jmin<long> (3, (long) shape.size()), shape.end()); }
+                        if (sym == 'U') { velocity = 74; return std::vector<int> (shape.end() - std::min<long> (3, (long) shape.size()), shape.end()); }
                         if (sym == 'm')
                         {
                             velocity = 62;
                             length = juce::jmin (length, 0.08);
-                            return std::vector<int> (shape.end() - juce::jmin<long> (3, (long) shape.size()), shape.end());
+                            return std::vector<int> (shape.end() - std::min<long> (3, (long) shape.size()), shape.end());
                         }
                         if (sym == 'a')
                         {
-                            std::vector<int> top (shape.end() - juce::jmin<long> (4, (long) shape.size()), shape.end());
+                            std::vector<int> top (shape.end() - std::min<long> (4, (long) shape.size()), shape.end());
                             int sum = 0;
                             for (auto t : top) sum += t;
                             if (! top.empty() && sum / (int) top.size() < 66) for (auto& t : top) t += 12;
                             static const int order[] = { 0, 2, 1, 3, 2, 1 };
-                            const int pick = order[arpIndex++ % 6] % (int) juce::jmax<size_t> (1, top.size());
+                            const int pick = order[arpIndex++ % 6] % (int) std::max<size_t> (1, top.size());
                             velocity = accent ? 88 : 76;
                             return { top[(size_t) pick] };
                         }
