@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300">
+
+<g transform="translate(40,40) scale(0.43)"><defs>
+ <linearGradient id="bgA" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1b1f27"/><stop offset="1" stop-color="#0d0f13"/></linearGradient>
+ <linearGradient id="goldA" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#8a6d2c"/><stop offset="0.55" stop-color="#d4a843"/><stop offset="1" stop-color="#f3d27a"/></linearGradient>
+ <radialGradient id="glowA" cx="0.5" cy="0.38" r="0.6"><stop offset="0" stop-color="#d4a843" stop-opacity="0.18"/><stop offset="1" stop-color="#d4a843" stop-opacity="0"/></radialGradient>
+</defs>
+<rect x="8" y="8" width="496" height="496" rx="112" fill="url(#bgA)"/>
+<rect x="8" y="8" width="496" height="496" rx="112" fill="url(#glowA)"/>
+<rect x="9.5" y="9.5" width="493" height="493" rx="110.5" fill="none" stroke="#d4a843" stroke-opacity="0.35" stroke-width="3"/>
+<rect x="212" y="76" width="88" height="22" rx="5" fill="url(#goldA)"/>
+<rect x="212" y="107" width="88" height="22" rx="5" fill="url(#goldA)"/>
+<rect x="212" y="138" width="88" height="22" rx="5" fill="url(#goldA)"/>
+<rect x="110" y="169" width="292" height="22" rx="5" fill="url(#goldA)"/>
+<rect x="110" y="200" width="292" height="22" rx="5" fill="url(#goldA)"/>
+<rect x="212" y="231" width="88" height="22" rx="5" fill="url(#goldA)"/>
+<rect x="212" y="262" width="88" height="22" rx="5" fill="url(#goldA)"/>
+<rect x="212" y="293" width="88" height="22" rx="5" fill="url(#goldA)"/>
+<rect x="212" y="324" width="88" height="22" rx="5" fill="url(#goldA)"/>
+<rect x="212" y="355" width="88" height="22" rx="5" fill="url(#goldA)"/>
+<rect x="212" y="386" width="88" height="22" rx="5" fill="url(#goldA)"/>
+<rect x="212" y="417" width="88" height="19" rx="5" fill="url(#goldA)"/>
+</g>
+<text x="300" y="150" font-family="Inter Display" font-weight="800" font-size="104" fill="#16181d" letter-spacing="2">GOSPEL</text>
+<text x="304" y="214" font-family="Inter" font-weight="600" font-size="38" fill="#c79a32" letter-spacing="14">PRODUCTION STUDIO</text>
+</svg>
