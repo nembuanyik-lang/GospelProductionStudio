@@ -55,7 +55,7 @@ public:
 
     void renderNextBlock (juce::AudioBuffer<float>& output, int startSample, int numSamples) override
     {
-        if (phaseDelta == 0.0)
+        if (juce::exactlyEqual (phaseDelta, 0.0))
             return;
 
         const auto numChannels = output.getNumChannels();

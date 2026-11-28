@@ -4,13 +4,16 @@
 #include "Sfz.h"
 #include "Instruments.h"
 #include "StudioKeys.h"
+#include "Percussion.h"
+#include "GuitarPlugin.h"
 
 namespace te = tracktion;
 
 //==============================================================================
 //  Gospel Sampler: plays the piano, bass and drum sound packs (SFZ).
 //  Velocity layers, round robin, release samples, sustain pedal, hi-hat choke.
-//  Until a pack is installed it plays the simple Studio Keys sound.
+//  Until a pack is installed it plays the simple Studio Keys sound, or for
+//  the guitars the built-in plucked-string guitar (Step 30).
 //==============================================================================
 class SamplerPlugin final : public te::Plugin,
                             private juce::ChangeListener
@@ -40,6 +43,8 @@ public:
     void reset() override;
     void applyToBuffer (const te::PluginRenderContext&) override;
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
+    void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;
+    void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override;
 
     // Settings (stored in the song)
     juce::CachedValue<juce::String> instrumentId;
@@ -53,6 +58,10 @@ public:
     juce::int64 getMemoryBytes() const;
 
     void reloadInstrument();
+    bool isMySounds() const                                      { return instrumentId.get() == "mysounds"; }
+    bool isGuitar() const                                        { return guitarSound.load() >= 0; }
+    bool isPercussion() const                                    { return percussionMode.load() >= 0; }
+    bool hasBuiltInSound() const                                 { return isGuitar() || isPercussion(); }
 
 private:
     struct Voice
@@ -83,6 +92,8 @@ private:
     juce::SpinLock instrumentLock;
     Sfz::InstrumentPtr instrument;
     std::atomic<bool> instrumentChanged { false };
+    std::atomic<bool> userKit { false };           // My Sounds: silent (not Studio Keys) when empty
+    bool reloadPending = false;
     Status status = Status::loading;
     int loadGeneration = 0;
 
@@ -103,7 +114,19 @@ private:
     double sampleRate = 44100.0;
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
 
+    // The Drum Kit also plays African percussion (congas, shakers, bells...) for notes it has no sample for.
+    // African Percussion and Balafon (Step 31): recorded where the pack has the sound, built-in otherwise.
+    std::atomic<bool> drumKit { false };
+    std::atomic<int> percussionMode { -1 };      // 0 African Percussion, 1 Balafon, -1 neither
+    Percussion::Synth percussion;
+    struct PercHit { int offset, note; float velocity; };
+    std::vector<PercHit> percHits;
+    bool kitHasNote (int note) const;
+
     // Fallback until a pack is installed
+    std::atomic<int> guitarSound { -1 };          // guitars: 0 clean, 1 nylon; -1 not a guitar
+    GuitarSynth guitarFallback;
+    void renderGuitarFallback (juce::AudioBuffer<float>&, int start, int num);
     juce::Synthesiser fallback;
     juce::MidiBuffer midi;
 

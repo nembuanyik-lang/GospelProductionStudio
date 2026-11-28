@@ -100,6 +100,8 @@ public:
     bool isOpen() const                             { return clip != nullptr; }
 
     std::function<void()> onClose, onSplitChanged;
+    std::function<void (te::MidiClip*)> onDrumGrid;      // drum clips: back to the drum grid (Step 17)
+    void setDrumGridAvailable (bool);
     bool isSplit() const                            { return splitButton.getToggleState(); }
 
     void paint (juce::Graphics&) override;
@@ -191,7 +193,7 @@ private:
     juce::ComboBox gridBox, lengthBox;
     juce::TextButton editButton { "Edit" }, fitButton { "Fit to chords" }, zoomButton { "Fit" };
     juce::ToggleButton checkToggle { "Check notes" };
-    juce::TextButton splitButton { "Split" }, closeButton { "Close" };
+    juce::TextButton splitButton { "Split" }, closeButton { "Close" }, drumGridButton { "Drum grid" };
 
     RollRuler ruler { *this };
     RollKeys keys { *this };

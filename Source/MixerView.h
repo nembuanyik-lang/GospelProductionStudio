@@ -34,6 +34,7 @@ private:
     std::unique_ptr<Strip> master;
     juce::String lastSignature;
     juce::Label hint;
+    juce::TextButton addBusButton { "+ Bus" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MixerView)
 };

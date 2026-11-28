@@ -40,6 +40,8 @@ namespace PluginHost
     // The Plugins window (scan, folders, list)
     void openManager (te::Engine&);
     void closeManager();
+    std::unique_ptr<juce::Component> createManagerComponent (te::Engine&);
+    inline std::function<void()> onOpenManagerRequest;     // set by the main window: show as a page
 
     //==========================================================================
     class Scanner final : private juce::Thread

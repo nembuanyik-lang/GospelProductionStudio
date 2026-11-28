@@ -27,6 +27,13 @@ public:
 
     te::Engine& getEngine()                                  { return engine; }
     juce::AudioDeviceManager& getAudioDeviceManager()        { return engine.getDeviceManager().deviceManager; }
+
+    // Recording delay (Step 28): the driver's reported delay is corrected by the engine;
+    // this extra correction (ms, + moves recordings earlier) is what the check measured.
+    double getRecordingCorrectionMs();
+    void setRecordingCorrectionMs (double ms);
+    double getReportedLatencyMs();
+    void prepareForLatencyCheck (bool starting);          // silence: stop, no live monitoring, no test tone
     MemoRecorder& getMemo()                                  { return memo; }
 
     //==========================================================================
@@ -60,7 +67,17 @@ public:
     // Called just before the current song is closed: screens must let go of its
     // clips, tracks and plugins here (they are deleted right after).
     std::function<void()> onEditAboutToChange;
-    void autosaveIfChanged();                                // called every few seconds
+    void autosaveIfChanged();
+
+    // Versions and recovery (Steps 43-44)
+    juce::File getSongFile() const;
+    void discardSongWithoutSaving();               // before going back to a version
+    void songClosing();                            // the app is closing: a version "when closed"                                // called every few seconds
+
+    // Recordings and tempo changes (Step 23): asks once per song, then stretches in the background
+    std::function<void()> onAskTempoMode;                    // first tempo change in a song with recordings
+    std::function<void (const juce::String&)> onTempoStatus; // "Stretching 3 recordings to 100 BPM..." or empty
+    void tempoModeChosen();                                  // after the answer: start stretching if asked to
 
     //==========================================================================
     // Transport
@@ -93,6 +110,13 @@ public:
 
     // Built-in instruments (Step 8)
     void setInstrument (te::AudioTrack&, const juce::String& instrumentId);
+
+    // Track names follow the instrument (Step 26): "Piano", "Organ 2"... A name you typed is never changed.
+    static int upgradeBuiltInInstruments (te::Edit&);                       // Steps 30-31: built-in guitar/percussion -> sampler
+    static juce::String trackNameFor (const juce::String& instrumentId);   // "Piano", "Bass", "Percussion"
+    static bool hasAutomaticName (te::Track&);                              // "Organ", "Piano 2", "Instrument 6"
+    static juce::String uniqueTrackName (te::Edit&, const juce::String& base, const te::Track* except = nullptr);
+    static void nameAfterInstrument (te::AudioTrack&, const juce::String& newName);
     static te::Plugin* getInstrumentPlugin (te::AudioTrack&);
     static juce::String getInstrumentId (te::AudioTrack&);
     static juce::String describeInstrument (te::AudioTrack&);       // "Grand Piano", "Grand Piano (not downloaded)"
@@ -142,12 +166,16 @@ public:
     float getTrackInputLevel (te::AudioTrack&);                         // 0..1, for the header meter
     bool areInputsMono() const;
     void setInputsMono (bool);
+    std::vector<std::pair<juce::String, te::InputDevice::MonitorMode>> monitorsBeforeCheck;
+    juce::uint32 lastVersionMs = 0;
+    bool discardNextLoad = false;
     te::InputDevice::MonitorMode getMonitorMode (te::AudioTrack&) const;
     void setMonitorMode (te::AudioTrack&, te::InputDevice::MonitorMode);
     bool isPunchEnabled() const;
     void setPunchEnabled (bool);
     double getRecordStartSeconds() const                     { return recordStartSeconds; }
     te::Clip* importAudio (te::AudioTrack&, const juce::File&, double startSeconds);
+    juce::File copyIntoSong (const juce::File&, const juce::String& subfolder);   // keeps the song's audio with the song
     static juce::String describeInput (te::WaveInputDevice*);
 
 private:
@@ -188,6 +216,11 @@ private:
     juce::AudioDeviceManager::LevelMeter::Ptr inputLevel, outputLevel;
     int clickSound = 0;
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
+
+    // Stretching recordings to a new tempo, in the background (Step 23)
+    struct TempoStretcher;
+    std::unique_ptr<TempoStretcher> tempoStretcher;
+    void changeTempo (double bpm);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StudioEngine)
 };

@@ -46,6 +46,7 @@ public:
     }
 
     void flush()   { editor.flush(); }
+    void selectSong (const juce::String& id)   { listPanel.selectSong (id); }
 
     std::function<void (const juce::String& id)> onOpenInStudio, onSongDeleted;
 

@@ -6,7 +6,7 @@ namespace te = tracktion;
 
 //==============================================================================
 //  Starter drum grooves (General MIDI drum notes), inserted as clips on the
-//  Drums track. The full African and Cameroonian groove pack is Step 21.
+//  Drums track, including the African and Cameroonian groove pack (Step 21).
 //
 //  Steps: X accent, x normal, o soft, g ghost, - rest.
 //==============================================================================
@@ -24,6 +24,8 @@ namespace Grooves
     };
 
     const std::vector<Groove>& all();
+    const Groove* find (const juce::String& name);
+    bool usesPercussion (const Groove&);          // congas, shakers, bells...
     bool fits (const Groove&, int numerator, int denominator);
     int numSteps (const Groove&);
 
@@ -35,6 +37,10 @@ namespace Grooves
     namespace Drum
     {
         enum : int { kick = 36, rim = 37, snare = 38, closedHat = 42, pedalHat = 44, openHat = 46,
-                     lowTom = 45, midTom = 47, highTom = 50, floorTom = 43, crash = 49, ride = 51, rideBell = 53 };
+                     lowTom = 45, midTom = 47, highTom = 50, floorTom = 43, crash = 49, ride = 51, rideBell = 53,
+                     // African percussion (played by the Drum Kit's percussion synth, see Percussion.h)
+                     clap = 39, tambourine = 54, cowbell = 56, djembeSlap = 60, djembeTone = 61, congaMute = 62,
+                     congaOpen = 63, congaLow = 64, talkHigh = 65, talkLow = 66, bellHigh = 67, bellLow = 68,
+                     cabasa = 69, shaker = 70, claves = 75, woodblock = 76, talkFall = 78, talkRise = 79, djembeBass = 87 };
     }
 }

@@ -111,6 +111,7 @@ private:
 //  The whole arrangement view.
 //==============================================================================
 class TimelineView final : public juce::Component,
+                           public juce::FileDragAndDropTarget,
                            private juce::Timer,
                            private juce::ScrollBar::Listener
 {
@@ -171,9 +172,22 @@ public:
     void splitAtPlayhead();
     void showClipSettings (te::Clip&);
     std::function<void (te::WaveAudioClip*)> onOpenComp;
-    void importAudioTo (te::AudioTrack&);
+    void importAudioTo (te::AudioTrack&, bool asLoop = false);
+    te::Clip* importFileAt (te::AudioTrack&, const juce::File&, double beat, bool asLoop);
+    void loopMenuChosen (te::WaveAudioClip&, int menuResult);
+
+    bool isInterestedInFileDrag (const juce::StringArray&) override;
+    void fileDragMove (const juce::StringArray&, int x, int y) override;
+    void fileDragExit (const juce::StringArray&) override;
+    void filesDropped (const juce::StringArray&, int x, int y) override;
+    juce::Point<int> getDropPoint() const        { return dropPoint; }
     std::function<juce::File()> getMemoFile;
     std::unique_ptr<juce::FileChooser> chooser;
+    juce::Point<int> dropPoint { -1, -1 };
+    juce::String lastLoopMessage;
+    int loopCheckTick = 0;
+    double loopSignature = 0.0;
+    juce::uint32 loopSignatureTime = 0;
 
     // Chords (Step 6) --------------------------------------------------------
     std::function<Theory::Key()> getKey;
@@ -209,7 +223,8 @@ private:
     juce::String lastSignature;
     double lastPlayhead = -1.0;
 
-    juce::TextButton addTrackButton { "+ Track" }, undoButton { "Undo" }, redoButton { "Redo" }, fitButton { "Fit" };
+    juce::TextButton addTrackButton { "+ Track" }, undoButton { "Undo" }, redoButton { "Redo" }, fitButton { "Fit" }, bandButton { "Band..." };
+    void openBand();
     juce::ComboBox snapBox;
     juce::Slider zoomSlider { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
 

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "BackgroundWork.h"
+#include <map>
+
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "Instruments.h"
 
@@ -16,7 +19,9 @@ public:
     ~SoundLibrary() override;
 
     static SoundLibrary* getInstance()              { return instance; }
-    static void openWindow();                       // shows the Sound Library window
+    static void openWindow();                       // shows the Sound Library (as a page in the main window)
+    static std::unique_ptr<juce::Component> createComponent();
+    static inline std::function<void()> onOpenRequest;   // set by the main window
 
     struct Pack
     {
@@ -63,6 +68,7 @@ private:
     std::unique_ptr<juce::DocumentWindow> window;
 
     static SoundLibrary* instance;
+    std::map<juce::String, std::shared_ptr<BackgroundWork::Token>> busyTokens;      // downloads in progress (Step 24)
     friend class SoundLibraryComponent;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SoundLibrary)

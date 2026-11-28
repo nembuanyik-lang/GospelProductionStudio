@@ -2,10 +2,12 @@
 
 #include "StudioEngine.h"
 #include "SongLibrary.h"
+#include "SongSafety.h"
 #include "TransportButton.h"
 #include "Timeline.h"
 #include "ChordPanel.h"
 #include "PianoRoll.h"
+#include "DrumGrid.h"
 #include "CompEditor.h"
 #include "MixerView.h"
 
@@ -22,6 +24,11 @@ public:
     ~StudioPage() override;
 
     void openSong (const juce::String& songId);
+
+    // Steps 43-44
+    void goBackToVersion (const SongSafety::Version&);
+    int rescueRecordings (const SongSafety::Session::Previous&);
+    void mouseDown (const juce::MouseEvent&) override;
     void songWasDeleted (const juce::String& songId);
     bool handleShortcut (const juce::KeyPress&);
     bool keyPressed (const juce::KeyPress& key) override   { return handleShortcut (key); }
@@ -70,8 +77,16 @@ private:
     TimelineView timeline { engine };
     std::unique_ptr<ChordPanel> chordPanel;
     std::unique_ptr<PianoRoll> pianoRoll;
+    std::unique_ptr<DrumGrid> drumGrid;
     std::unique_ptr<MixerView> mixer;
     juce::TextButton mixerButton { "Mixer" };
+    juce::TextButton exportButton { "Export" };
+    juce::TextButton versionsButton { "Versions" };           // Step 44
+
+public:
+    // Shows a page inside the main window (set by the main window), Step 14
+    std::function<void (const juce::String& title, std::unique_ptr<juce::Component>)> onShowPage;
+private:
     void setMixerOpen (bool);
     bool isMixerOpen() const       { return mixer != nullptr && mixer->isVisible(); }
     std::unique_ptr<CompEditor> compEditor;
@@ -80,10 +95,16 @@ private:
     bool compact = false;
     void openPianoRoll (te::MidiClip*);
     void closePianoRoll();
+    void openDrumGrid (te::MidiClip*);
+    void closeDrumGrid (bool now = false);
+    bool isDrumClip (te::MidiClip&) const;
     bool chordPanelOpen = true;
 
     // State
     juce::String songId;
+    juce::String tempoStatus;                       // "Stretching 3 recordings to 100 BPM..."
+    void askTempoMode();
+    void showTempoMenu();
     std::vector<double> tapTimes;
     StudioEngine::Position lastPosition;
     bool lastPlaying = false, lastRecording = false;

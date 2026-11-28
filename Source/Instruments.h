@@ -9,7 +9,7 @@
 //==============================================================================
 namespace Instruments
 {
-    enum class Kind { sampler, organ, studioKeys };
+    enum class Kind { sampler, organ, studioKeys, guitar, percussion };
 
     struct Choice
     {

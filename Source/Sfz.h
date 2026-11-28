@@ -69,6 +69,9 @@ namespace Sfz
 
     int noteNumberFromText (const juce::String&);   // "c4" = 60, "f#2", "61"
 
+    // A copy of main plus the regions of extra for keys main has no region for.
+    InstrumentPtr addMissingKeys (const InstrumentPtr& main, const InstrumentPtr& extra);
+
     //==========================================================================
     //  Shared cache: tracks using the same instrument share one copy in memory.
     //==========================================================================
@@ -78,7 +81,10 @@ namespace Sfz
         static Library& getInstance();
 
         // Calls back on the message thread with the loaded instrument (or nullptr).
-        void request (const juce::File& sfzFile, std::function<void (InstrumentPtr)> onLoaded);
+        // With an extra file, its regions fill the keys the main instrument does not
+        // play (Step 32: the Drum Kit plays the recorded African percussion).
+        void request (const juce::File& sfzFile, std::function<void (InstrumentPtr)> onLoaded,
+                      const juce::File& extraForMissingKeys = {});
         void forget (const juce::File& sfzFile);     // after a pack is removed
 
         juce::int64 getMemoryInUse();

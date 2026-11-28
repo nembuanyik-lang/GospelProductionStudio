@@ -29,6 +29,7 @@ struct Song
     juce::String notes;
     std::vector<SongSection> sections;
     juce::Time   created, modified;
+    juce::var    release;                     // release details for distributors (plan Step 18)
 
     juce::var toVar() const;
     static Song fromVar (const juce::var& v);
